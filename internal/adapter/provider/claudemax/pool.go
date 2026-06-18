@@ -15,10 +15,11 @@ const (
 	// the account returns to the pool.
 	defaultCooldown = 60 * time.Second
 
-	// usageExhaustedCooldown benches an account that reports "out of extra usage" (its pay-as-you-go
-	// budget is momentarily spent). Deliberately short: this state fluctuates minute-to-minute, so a
-	// long bench would miss the windows where the account serves again — we retry it quickly.
-	usageExhaustedCooldown = 60 * time.Second
+	// usageExhaustedCooldown benches an account that reports "out of extra usage". Empirically this
+	// is a short throttle on the subscription's programmatic path, not a real budget exhaustion: the
+	// account serves again within ~1s. So the bench is tiny — both to retry the account quickly and
+	// to keep the all-cooling 503's Retry-After short, since clients (Hermes' SDK) honor it.
+	usageExhaustedCooldown = 5 * time.Second
 
 	// deadTokenCooldown benches an account whose credential can't be refreshed (a dead session key
 	// needing an operator re-seed); cooling it longer avoids hammering the OAuth bootstrap each Send.
