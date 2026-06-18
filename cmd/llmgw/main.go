@@ -77,7 +77,7 @@ func serve(ctx context.Context, cfg config.Config, store *postgres.Store) error 
 	pruneCtx, stopPruner := context.WithCancel(context.Background())
 	prunerDone := startPruner(pruneCtx, store)
 
-	server := httpserver.New(store, postgres.DefaultProviderName)
+	server := httpserver.New(store, postgres.DefaultProviderName, cfg.DefaultProject)
 	serveErr := serveAsync(server, listener)
 
 	var result error

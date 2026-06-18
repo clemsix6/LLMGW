@@ -108,7 +108,9 @@ GROUP BY tag ORDER BY cost DESC;
 The gateway exposes the Anthropic **Messages** API at `POST /v1/messages`. Point any Anthropic SDK
 or HTTP client at the gateway's base URL and add the governance headers:
 
-- `X-Project: <name>` — **required**; the project is auto-created on first use.
+- `X-Project: <name>` — **required**; the project is auto-created on first use. A client that
+  cannot send custom headers (e.g. a fixed Anthropic SDK) can be made a drop-in by setting
+  `LLMGW_DEFAULT_PROJECT` — header-less calls are then attributed to that project instead of 400.
 - `X-Tags: <tag>` — optional budget bucket (defaults to `default`).
 
 There is no auth (local, trusted traffic); upstream credentials are the gateway's OAuth tokens, so
