@@ -210,14 +210,11 @@ RETURNING id`
 
 // pruneExpiredReservations deletes every reservation whose TTL has elapsed, across all projects.
 // It is test-only: it runs before each test-only InflightTotals read so that path mirrors prod.
-// Production prunes per-project inside ReserveIfAdmitted (under the admission lock), not here.
+// Production prunes per-project inside ReserveIfAdmitted (under the admission lock), not here, or
+// periodically via PruneOlderThan. It discards the deleted count the retention sweep reports.
 func (s *Store) pruneExpiredReservations(ctx context.Context) error {
-	const query = `DELETE FROM reservation WHERE expires_at < now()`
-
-	if _, err := s.pool.Exec(ctx, query); err != nil {
-		return fmt.Errorf("prune expired reservations:\n%w", err)
-	}
-	return nil
+	_, err := s.pruneExpiredReservationRows(ctx)
+	return err
 }
 
 // pruneProjectReservations deletes the project's expired reservations. ReserveIfAdmitted calls it

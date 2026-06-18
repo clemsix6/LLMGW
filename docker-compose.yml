@@ -1,0 +1,30 @@
+services:
+  llmgw:
+    build: .
+    image: llmgw:latest
+    container_name: llmgw
+    restart: unless-stopped
+
+    # All LLMGW_* configuration comes from .env (see .env.example). Copy it to .env and fill in
+    # the values before `docker compose up`.
+    env_file: .env
+
+    # Local-only exposure: the gateway is published on the HOST loopback interface ONLY, never on a
+    # routable address. Inside the container the app must bind 0.0.0.0 (set LLMGW_LISTEN=0.0.0.0:8088
+    # in .env) so the docker proxy can reach it; the "127.0.0.1:" host prefix is what keeps the
+    # gateway off the network. An app binding 127.0.0.1 *inside* the container would be unreachable
+    # through a published port.
+    ports:
+      - "127.0.0.1:8088:8088"
+
+    # The gateway connects to the EXISTING Postgres instance using a SEPARATE database "llmgw"
+    # (run `CREATE DATABASE llmgw;` once — see README). It does NOT run its own Postgres; no
+    # database service is defined here on purpose, to avoid spinning a throwaway store for prod
+    # data. Point LLMGW_POSTGRES_DSN at the existing instance.
+    #
+    # When Postgres runs on the docker host, host.docker.internal (mapped below) resolves to it
+    # from inside the container — set the DSN host to host.docker.internal. Alternatively, if
+    # Postgres runs in another compose project / network, attach this service to that external
+    # network instead and use the Postgres service name as the DSN host.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

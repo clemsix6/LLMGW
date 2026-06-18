@@ -6,8 +6,18 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"time"
 
 	"github.com/clemsix6/LLMGW/internal/domain"
+)
+
+const (
+	// readHeaderTimeout bounds how long a client may take to send request headers, capping the
+	// slow-header (Slowloris) exposure without limiting body upload or response streaming.
+	readHeaderTimeout = 15 * time.Second
+
+	// idleTimeout closes a keep-alive connection that sends no new request within the window.
+	idleTimeout = 120 * time.Second
 )
 
 // Server is the gateway's HTTP surface.
@@ -26,7 +36,13 @@ func New(store domain.Store, providerName string) *Server {
 	mux.HandleFunc("POST /v1/messages", messages.handle)
 
 	return &Server{
-		httpServer: &http.Server{Handler: mux},
+		httpServer: &http.Server{
+			Handler:           mux,
+			ReadHeaderTimeout: readHeaderTimeout,
+			IdleTimeout:       idleTimeout,
+			// No WriteTimeout on purpose: a streaming (SSE) response writes for the full, unbounded
+			// duration of a generation. A WriteTimeout would abort long streams mid-flight.
+		},
 	}
 }
 
