@@ -11,8 +11,9 @@ package e2e
 //
 //	set -a; . ./.env; set +a; go test ./test/e2e -run Provider -v
 //
-// If a run fails AFTER the refresh succeeded, the rotated token is already in the store but
-// the write-back may not have happened — an operator may need to re-seed LLMGW_TEST_REFRESH_TOKEN.
+// The write-back is registered via t.Cleanup right after the provider is built, so it runs even
+// if a later assertion fails or sendWithRetry exhausts its retries after a refresh already
+// rotated and persisted the token — the .env always ends with the latest refresh_token.
 
 import (
 	"bytes"
@@ -43,8 +44,8 @@ const (
 	// testClaudeCodeVersion is the spoofed Claude Code version used in the E2E.
 	testClaudeCodeVersion = "2.1.181"
 
-	// minContentLength is the lower bound for a plausible (non-empty) model reply.
-	minContentLength = 1
+	// minContentLength is the lower bound (chars) for a plausible-length model reply (spec §11).
+	minContentLength = 3
 
 	// maxAttempts bounds retries of transient (5xx/network/timeout) upstream errors.
 	maxAttempts = 4
@@ -73,18 +74,19 @@ func TestProviderRealNonStreaming(t *testing.T) {
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
 	ctx := context.Background()
-	provider, store := newRealProvider(t, ctx, seedToken)
+	provider := newRealProvider(t, ctx, seedToken)
 
 	req := tinyRequest(t)
 	result, body := sendWithRetry(t, ctx, provider, req)
 
 	assertPlausibleReply(t, body, result)
-	rotateEnvToken(t, ctx, store)
 }
 
 // newRealProvider boots an ephemeral Postgres, seeds the refresh token, and builds a Claude
-// Max provider bound to the test account.
-func newRealProvider(t *testing.T, ctx context.Context, seedToken string) (*claudemax.Provider, *postgres.Store) {
+// Max provider bound to the test account. It registers the .env token write-back via t.Cleanup
+// so the rotated refresh_token is persisted even if a later assertion fails or sendWithRetry
+// exhausts its retries after a refresh already rotated the token.
+func newRealProvider(t *testing.T, ctx context.Context, seedToken string) *claudemax.Provider {
 	t.Helper()
 
 	container, dsn, err := startPostgres(ctx)
@@ -103,7 +105,13 @@ func newRealProvider(t *testing.T, ctx context.Context, seedToken string) (*clau
 		t.Fatalf("seed token: %v", err)
 	}
 
-	return claudemax.New(store, testAccount, testClaudeCodeVersion), store
+	provider := claudemax.New(store, testAccount, testClaudeCodeVersion)
+
+	// Write the rotated refresh token back to .env on test exit (LIFO: before store.Close), so it
+	// runs even on a later assertion failure or retry exhaustion after a refresh persisted a token.
+	t.Cleanup(func() { rotateEnvToken(t, ctx, store) })
+
+	return provider
 }
 
 // tinyRequest builds a minimal non-streaming Messages request.

@@ -54,8 +54,9 @@ pre-call rate control instead of a blunt cooldown.
   OpenRouter, V2+).
 
 The body is forwarded **unchanged except for a prepended Claude Code system block** (and a
-minimal required normalization set — see §9). It is otherwise not transformed: tools,
-function-calling, and content blocks pass through.
+minimal required normalization set — dropping empty system blocks and stripping ephemeral cache
+`scope`; see §9). It is otherwise not transformed: tools, function-calling, and content blocks
+pass through.
 
 ## 3. Architecture (hexagonal)
 

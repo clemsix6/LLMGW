@@ -224,6 +224,13 @@ in the store; modify `cmd/llmgw/main.go` (seed tokens from config into `oauth_to
   `X-Project: e2e`, a real Anthropic body → 200, plausible content; assert a `project` row `e2e`
   exists and one `usage_event` row recorded with `output_tokens > 0`. **This batch makes LLMGW a
   working drop-in replacement for clewdr's `/code` path.**
+- [ ] **Task 3.4 — System normalization (clewdr parity).** The request handler/normalization must,
+  mirroring clewdr `drop_empty_system` + `strip_ephemeral_scope_from_system`
+  (`/tmp/clewdr-src/src/middleware/claude/request.rs`): **drop whitespace-only system text blocks**
+  and **strip `cache_control` ephemeral `scope` from system blocks**. Consumers using prompt caching
+  (the TrueWallet Processor) send these and Anthropic 400s otherwise. Unit test: a `system` array
+  with a whitespace-only text block + a block whose `cache_control` carries `scope` → after
+  normalization the empty block is dropped and `scope` is stripped (the rest of `cache_control` kept).
 
 **Verify:** gated E2E `TestPassthroughRealNonStreaming` PASS; unit tests PASS; build+vet green.
 **Wiring:** full request path live (minus streaming/budget). **Commit + push.**
