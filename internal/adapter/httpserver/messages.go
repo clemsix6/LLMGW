@@ -125,7 +125,7 @@ func (h *messagesHandler) record(ctx context.Context, projectID int64, tag, mode
 		Provider:     h.providerName,
 		InputTokens:  o.usage.InputTokens,
 		OutputTokens: o.usage.OutputTokens,
-		CostUSD:      0, // notional cost is computed in a later batch (pricing).
+		CostUSD:      h.costFor(ctx, model, o.usage),
 		Status:       o.status,
 		LatencyMS:    o.latencyMS,
 		Error:        o.errMsg,
@@ -134,6 +134,26 @@ func (h *messagesHandler) record(ctx context.Context, projectID int64, tag, mode
 	if err := h.store.RecordUsage(ctx, event); err != nil {
 		log.Printf("llmgw: record usage (project=%d tag=%q): %v", projectID, tag, err)
 	}
+}
+
+// costFor returns the notional USD cost of a metered call, or 0 when the model has no price row.
+// An unpriced model records zero cost here (fail-closed budget enforcement is a later batch); a
+// price-lookup failure is logged and treated as unpriced so a recording never blocks the proxy.
+// A call that spent no tokens skips the lookup entirely.
+func (h *messagesHandler) costFor(ctx context.Context, model string, u usage.Usage) float64 {
+	if u.InputTokens == 0 && u.OutputTokens == 0 {
+		return 0
+	}
+
+	in, out, ok, err := h.store.PriceFor(ctx, model)
+	if err != nil {
+		log.Printf("llmgw: price lookup (model=%q): %v", model, err)
+		return 0
+	}
+	if !ok {
+		return 0
+	}
+	return usage.Cost(u, in, out)
 }
 
 // parseBody reads and parses the Anthropic request body, writing a 400 on failure.

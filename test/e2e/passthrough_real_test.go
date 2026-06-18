@@ -188,7 +188,8 @@ func assertProjectExists(t *testing.T, ctx context.Context, dsn, name string) {
 }
 
 // assertUsageRecorded asserts a successful usage_event was recorded for (project, tag) with
-// output tokens, proving metering attribution.
+// output tokens (metering attribution) and a positive notional cost (the requested model
+// claude-sonnet-4-6 is priced by migration 0003, so cost_usd must be > 0).
 func assertUsageRecorded(t *testing.T, ctx context.Context, dsn, project, tag string) {
 	t.Helper()
 
@@ -196,7 +197,7 @@ func assertUsageRecorded(t *testing.T, ctx context.Context, dsn, project, tag st
 	defer conn.Close(ctx)
 
 	const query = `
-SELECT ue.output_tokens, ue.input_tokens
+SELECT ue.output_tokens, ue.input_tokens, ue.cost_usd
 FROM usage_event ue
 JOIN project p ON p.id = ue.project_id
 WHERE p.name = $1 AND ue.tag = $2 AND ue.status = 'ok'
@@ -204,13 +205,17 @@ ORDER BY ue.ts DESC
 LIMIT 1`
 
 	var outputTokens, inputTokens int64
-	if err := conn.QueryRow(ctx, query, project, tag).Scan(&outputTokens, &inputTokens); err != nil {
+	var costUSD float64
+	if err := conn.QueryRow(ctx, query, project, tag).Scan(&outputTokens, &inputTokens, &costUSD); err != nil {
 		t.Fatalf("query usage_event for (%s, %s): %v", project, tag, err)
 	}
 	if outputTokens <= 0 {
 		t.Errorf("usage_event output_tokens = %d, want > 0", outputTokens)
 	}
-	t.Logf("usage_event recorded for (%s, %s): input=%d output=%d", project, tag, inputTokens, outputTokens)
+	if costUSD <= 0 {
+		t.Errorf("usage_event cost_usd = %v, want > 0 (claude-sonnet-4-6 is priced)", costUSD)
+	}
+	t.Logf("usage_event recorded for (%s, %s): input=%d output=%d cost_usd=%v", project, tag, inputTokens, outputTokens, costUSD)
 }
 
 // connectDB opens a single pgx connection to the ephemeral database for assertions.

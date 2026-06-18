@@ -15,11 +15,6 @@ func (s *Store) LimitsFor(ctx context.Context, projectID int64, tag string) ([]d
 	return nil, errNotImplemented
 }
 
-// PriceFor is implemented in Batch 5.
-func (s *Store) PriceFor(ctx context.Context, model string) (in, out float64, ok bool, err error) {
-	return 0, 0, false, errNotImplemented
-}
-
 // Reserve is implemented in Batch 6.
 func (s *Store) Reserve(ctx context.Context, projectID int64, tag string, ttl time.Duration) (reservationID int64, err error) {
 	return 0, errNotImplemented

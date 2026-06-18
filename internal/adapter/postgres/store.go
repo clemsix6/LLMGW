@@ -90,6 +90,22 @@ RETURNING id`
 	return id, nil
 }
 
+// PriceFor returns the notional per-million-token input/output USD prices for a model from the
+// model_price table. ok is false (with a nil error) when no price row exists, so callers can
+// distinguish an unpriced model from a query failure.
+func (s *Store) PriceFor(ctx context.Context, model string) (in, out float64, ok bool, err error) {
+	const query = `SELECT input_usd_per_mtok, output_usd_per_mtok FROM model_price WHERE model = $1`
+
+	err = s.pool.QueryRow(ctx, query, model).Scan(&in, &out)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, 0, false, nil
+	}
+	if err != nil {
+		return 0, 0, false, fmt.Errorf("price for model %q:\n%w", model, err)
+	}
+	return in, out, true, nil
+}
+
 // LoadToken returns the persisted OAuth token for an account label under the default provider.
 // It returns domain.ErrTokenNotFound when no row exists for the account.
 func (s *Store) LoadToken(ctx context.Context, account string) (domain.Token, error) {

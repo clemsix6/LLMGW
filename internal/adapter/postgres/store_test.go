@@ -11,6 +11,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 
 	"github.com/clemsix6/LLMGW/internal/domain"
+	"github.com/clemsix6/LLMGW/internal/domain/usage"
 )
 
 // newTestStore starts an ephemeral Postgres, applies migrations, and returns a ready Store.
@@ -122,6 +123,36 @@ func TestWindowedTotals(t *testing.T) {
 
 	// Hourly window, whole project: 30-minute news + 10-minute feed.
 	assertTotals(t, store, ctx, projectID, domain.WholeProjectTag, hourAgo, domain.Totals{Calls: 2, InputTokens: 150, OutputTokens: 50, CostUSD: 0.15})
+}
+
+// TestPriceFor proves migration 0003 seeded the model_price tiers (read back via PriceFor),
+// that an unpriced model is reported without an error, and that a seeded price computes a cost.
+func TestPriceFor(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	// Migration 0003 seeds the Anthropic list-price tiers; PriceFor reads one back (round-trip).
+	in, out, ok, err := store.PriceFor(ctx, "claude-sonnet-4-6")
+	if err != nil {
+		t.Fatalf("PriceFor(seeded): %v", err)
+	}
+	if !ok {
+		t.Fatal("PriceFor(claude-sonnet-4-6) ok = false, want true (migration 0003 should seed it)")
+	}
+	if in != 3 || out != 15 {
+		t.Errorf("PriceFor(claude-sonnet-4-6) = (%v, %v), want (3, 15)", in, out)
+	}
+
+	// A priced call computes a non-zero notional cost: 1M in @ 3 + 1M out @ 15 = 18.
+	got := usage.Cost(usage.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000}, in, out)
+	if want := 18.0; !floatsClose(got, want) {
+		t.Errorf("Cost(1M in, 1M out @ 3/15) = %v, want %v", got, want)
+	}
+
+	// An unknown model is reported (ok=false) without an error — not a failure.
+	if _, _, ok, err := store.PriceFor(ctx, "no-such-model"); err != nil || ok {
+		t.Errorf("PriceFor(unknown) = (ok=%v, err=%v), want (false, nil)", ok, err)
+	}
 }
 
 // seedUsage records one usage_event for the project/tag at the given timestamp.
