@@ -12,9 +12,6 @@ import (
 	"github.com/clemsix6/LLMGW/internal/domain"
 )
 
-// errNotImplemented is returned by store methods built in later batches.
-var errNotImplemented = errors.New("not implemented")
-
 const (
 	// DefaultProviderName identifies the single Claude Max provider used in V1. The handler
 	// records it as the serving backend on every usage_event.
