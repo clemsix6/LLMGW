@@ -115,7 +115,8 @@ type Provider interface {
 
 - [ ] **Task 0.1 — Config + migrations.** `config.Load()` reads env: `LLMGW_LISTEN` (default
   `127.0.0.1:8088`), `LLMGW_POSTGRES_DSN`, `LLMGW_OAUTH_REFRESH_TOKENS` (comma-separated seed,
-  `account_label=token` pairs). Wrap missing-required with `fmt.Errorf`. Write `0001_init.sql`
+  `account_label=token` pairs), `LLMGW_CLAUDE_CODE_VERSION` (default `2.1.181` — the operator's
+  current Claude Code version, used for the spoof UA + `cc_version`). Wrap missing-required with `fmt.Errorf`. Write `0001_init.sql`
   with the full spec §8 schema: `project, budget_limit, provider, route, model_price,
   oauth_token, usage_event, reservation` (+ index `usage_event(project_id, tag, ts)`,
   `reservation(project_id, tag)`). `dimension`/`window`/`action` as text with CHECK constraints.
@@ -179,7 +180,9 @@ in the store; modify `cmd/llmgw/main.go` (seed tokens from config into `oauth_to
   `sha256("59cf53e54c78" + sampled[4,7,20] + "2.1.76")`. **Note:** a live probe showed Anthropic
   does not currently validate the hash (a placeholder passed), so presence + format is what matters
   today — but replicate the exact algorithm for future-proofing; read the clewdr helper for the
-  exact code-unit sampling. Constants: UA `claude-code/2.1.76`, beta `oauth-2025-04-20`, version
+  exact code-unit sampling. Use the **configured** version `LLMGW_CLAUDE_CODE_VERSION` (default `2.1.181`) for the UA
+  `claude-code/<version>` AND the `cc_version=<version>.<hash>` — not the stale 2.1.76 (the hash is
+  unvalidated by Anthropic today, so the clewdr salt with the new version is fine). Fixed constants: beta `oauth-2025-04-20`, version
   `2023-06-01`. Unit test: header format matches the regex `cc_version=2\.1\.76\.[0-9a-f]{3}; cc_entrypoint=cli; cch=00000;`.
 - [ ] **Task 2.3 — Non-streaming Send + real-API E2E.** `provider.Send` (non-streaming path):
   build request → `WithClaudeCodeSystem` → POST `https://api.anthropic.com/v1/messages` with Bearer

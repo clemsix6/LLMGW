@@ -199,8 +199,12 @@ during the investigation (not derivable from source).
 **Spoof (Claude Code surface):**
 
 - `POST https://api.anthropic.com/v1/messages`, `Authorization: Bearer <access_token>`,
-  `User-Agent: claude-code/2.1.76`, `anthropic-beta: oauth-2025-04-20`,
-  `anthropic-version: 2023-06-01` (source: `chat.rs:139-142`, `constants.rs:22`).
+  `User-Agent: claude-code/<version>`, `anthropic-beta: oauth-2025-04-20`,
+  `anthropic-version: 2023-06-01` (source: `chat.rs:139-142`, `constants.rs:22`). `<version>`
+  is the operator's **current** Claude Code version, set via `LLMGW_CLAUDE_CODE_VERSION`
+  (**default `2.1.181`**; clewdr hardcodes the now-stale `2.1.76`, which still passes today but
+  tracking the live version avoids being flagged as an outdated client). The same `<version>`
+  feeds the billing-header `cc_version`.
 - clewdr prepends a **billing-header system block** on the `/code` path
   (`x-anthropic-billing-header: cc_version=2.1.76.<hash>; cc_entrypoint=cli; cch=00000;`)
   (source: `request.rs:119-136`, injected `:362-373`). The hash is a SHA-256 of sampled
