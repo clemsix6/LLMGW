@@ -20,11 +20,6 @@ func (s *Store) PriceFor(ctx context.Context, model string) (in, out float64, ok
 	return 0, 0, false, errNotImplemented
 }
 
-// DefaultRoute is implemented in Batch 3.
-func (s *Store) DefaultRoute(ctx context.Context) (domain.Provider, error) {
-	return nil, errNotImplemented
-}
-
 // RecordUsage is implemented in Batch 3.
 func (s *Store) RecordUsage(ctx context.Context, e domain.UsageEvent) error {
 	return errNotImplemented

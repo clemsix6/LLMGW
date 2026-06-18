@@ -9,9 +9,13 @@ import (
 
 	"github.com/clemsix6/LLMGW/internal/adapter/httpserver"
 	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
+	"github.com/clemsix6/LLMGW/internal/adapter/provider/claudemax"
 	"github.com/clemsix6/LLMGW/internal/config"
 	"github.com/clemsix6/LLMGW/internal/domain"
 )
+
+// defaultAccount is the OAuth account label used when no refresh token is configured.
+const defaultAccount = "acct1"
 
 func main() {
 	if err := run(); err != nil {
@@ -42,6 +46,9 @@ func run() error {
 		return err
 	}
 
+	provider := claudemax.New(store, providerAccount(cfg.RefreshTokens), cfg.ClaudeCodeVersion)
+	store.SetDefaultProvider(provider)
+
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("listen on %s:\n%w", cfg.Listen, err)
@@ -49,6 +56,15 @@ func run() error {
 
 	log.Printf("llmgw listening on %s", listener.Addr())
 	return httpserver.New().Serve(listener)
+}
+
+// providerAccount picks the account label the V1 provider serves: the first configured
+// refresh token, or a default when none is seeded.
+func providerAccount(seeds []config.RefreshToken) string {
+	if len(seeds) > 0 {
+		return seeds[0].Label
+	}
+	return defaultAccount
 }
 
 // seedTokens persists the configured refresh tokens for accounts that have no row yet.

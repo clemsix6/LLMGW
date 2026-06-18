@@ -29,6 +29,22 @@ var _ domain.Store = (*Store)(nil)
 // Store is the PostgreSQL-backed implementation of the domain.Store port.
 type Store struct {
 	pool *pgxpool.Pool // pool is the connection pool to the state database.
+
+	provider domain.Provider // provider is the backend the single V1 default route resolves to.
+}
+
+// SetDefaultProvider registers the provider returned by DefaultRoute. It is wired once at
+// startup by the composition root, before the server begins serving.
+func (s *Store) SetDefaultProvider(p domain.Provider) {
+	s.provider = p
+}
+
+// DefaultRoute resolves the provider serving every request in V1 (a single default route).
+func (s *Store) DefaultRoute(_ context.Context) (domain.Provider, error) {
+	if s.provider == nil {
+		return nil, errors.New("no default provider registered")
+	}
+	return s.provider, nil
 }
 
 // New opens a connection pool to dsn and applies any pending schema migrations.
