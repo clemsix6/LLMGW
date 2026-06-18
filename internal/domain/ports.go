@@ -97,6 +97,8 @@ type Token struct {
 
 	RefreshToken string // RefreshToken is the rotating refresh credential.
 
+	SessionKey string // SessionKey is the durable claude.ai cookie that bootstraps OAuth tokens; empty when seeded directly with a refresh token.
+
 	ExpiresAt time.Time // ExpiresAt is when AccessToken stops being valid.
 }
 
