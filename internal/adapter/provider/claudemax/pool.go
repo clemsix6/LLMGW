@@ -16,9 +16,9 @@ const (
 	defaultCooldown = 60 * time.Second
 
 	// usageExhaustedCooldown benches an account that reports "out of extra usage" (its pay-as-you-go
-	// budget is spent). Self-healing: the account is retried after the window, in case its limit has
-	// reset since.
-	usageExhaustedCooldown = 10 * time.Minute
+	// budget is momentarily spent). Deliberately short: this state fluctuates minute-to-minute, so a
+	// long bench would miss the windows where the account serves again — we retry it quickly.
+	usageExhaustedCooldown = 60 * time.Second
 
 	// deadTokenCooldown benches an account whose credential can't be refreshed (a dead session key
 	// needing an operator re-seed); cooling it longer avoids hammering the OAuth bootstrap each Send.
