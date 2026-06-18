@@ -1,0 +1,106 @@
+name: CI
+
+# Two jobs:
+#   - check: build, vet, gofmt, unit tests. Hermetic (Postgres via testcontainers, no Anthropic).
+#     Runs on every push and pull request.
+#   - e2e:   the real-API suite (test/e2e), which talks to the live Anthropic backend through a
+#     Claude Max OAuth refresh token. Anthropic ROTATES the refresh token on every use, so the
+#     job re-seeds the LLMGW_TEST_REFRESH_TOKEN secret with the rotated value after the run
+#     (write-back). It only runs on push to main and manual dispatch, serialised by a concurrency
+#     group so two runs never race the single-use token.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Build, vet & unit tests
+    runs-on: ubuntu-latest
+    env:
+      # CI runners are ephemeral; the testcontainers reaper is unnecessary and flaky there.
+      TESTCONTAINERS_RYUK_DISABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: build
+        run: go build ./...
+
+      - name: unit tests
+        run: go test -race ./internal/... -count=1
+
+  e2e:
+    name: E2E (real Anthropic)
+    needs: check
+    # Only on main pushes and manual runs: PRs must not burn the single-use refresh token.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # Serialise every real-API run repo-wide so two runs never consume the same rotated token.
+    concurrency:
+      group: llmgw-realapi
+      cancel-in-progress: false
+    env:
+      TESTCONTAINERS_RYUK_DISABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Preflight — require seed token
+        env:
+          SEED: ${{ secrets.LLMGW_TEST_REFRESH_TOKEN }}
+        run: |
+          if [ -z "$SEED" ]; then
+            echo "::error::LLMGW_TEST_REFRESH_TOKEN secret is empty — the real-API suite cannot run"
+            exit 1
+          fi
+
+      - name: Write .env
+        env:
+          SEED: ${{ secrets.LLMGW_TEST_REFRESH_TOKEN }}
+        # The harness reads the env var to refresh once, and rewrites this .env in place with the
+        # rotated token; the write-back step below reads it back out.
+        run: printf 'LLMGW_TEST_REFRESH_TOKEN=%s\n' "$SEED" > .env
+
+      - name: E2E tests
+        run: |
+          set -a; . ./.env; set +a
+          go test ./test/e2e/... -count=1 -v
+
+      - name: Persist rotated refresh token
+        # Always run: a passing or failing suite still rotated (and consumed) the seed token, so the
+        # secret must be updated to the live value or the next run starts from a dead token.
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.LLMGW_GH_PAT }}
+        run: |
+          NEW="$(grep '^LLMGW_TEST_REFRESH_TOKEN=' .env | cut -d= -f2-)"
+          if [ -n "$NEW" ]; then
+            printf '%s' "$NEW" | gh secret set LLMGW_TEST_REFRESH_TOKEN --repo "${{ github.repository }}"
+            echo "Rotated refresh token persisted to the secret."
+          else
+            echo "No rotated token found in .env; secret left unchanged."
+          fi
