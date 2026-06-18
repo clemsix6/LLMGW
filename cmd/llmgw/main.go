@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -15,7 +14,6 @@ import (
 	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
 	"github.com/clemsix6/LLMGW/internal/adapter/provider/claudemax"
 	"github.com/clemsix6/LLMGW/internal/config"
-	"github.com/clemsix6/LLMGW/internal/domain"
 )
 
 const (
@@ -57,7 +55,7 @@ func run() error {
 		return err
 	}
 
-	if err := seedTokens(ctx, store, cfg.RefreshTokens); err != nil {
+	if err := seedSessionKeys(ctx, store, cfg.SessionKeys); err != nil {
 		return err
 	}
 
@@ -148,29 +146,13 @@ func shutdown(server *httpserver.Server) error {
 	return server.Shutdown(ctx)
 }
 
-// seedTokens persists the configured refresh tokens for accounts that have no row yet.
-func seedTokens(ctx context.Context, store *postgres.Store, seeds []config.RefreshToken) error {
+// seedSessionKeys persists the configured session keys for accounts that have no row yet. The
+// store's insert is idempotent (never overwriting an existing row), so this is safe on every boot.
+func seedSessionKeys(ctx context.Context, store *postgres.Store, seeds []config.SessionKey) error {
 	for _, seed := range seeds {
-		if err := seedToken(ctx, store, seed); err != nil {
-			return err
+		if err := store.SeedSessionKey(ctx, seed.Label, seed.Key); err != nil {
+			return fmt.Errorf("seed session key %q:\n%w", seed.Label, err)
 		}
-	}
-	return nil
-}
-
-// seedToken persists one seed refresh token only when the account has no stored token.
-// A persisted token may already be rotated, so an existing row is never overwritten.
-func seedToken(ctx context.Context, store *postgres.Store, seed config.RefreshToken) error {
-	_, err := store.LoadToken(ctx, seed.Label)
-	if err == nil {
-		return nil
-	}
-	if !errors.Is(err, domain.ErrTokenNotFound) {
-		return fmt.Errorf("check seed token %q:\n%w", seed.Label, err)
-	}
-
-	if err := store.SaveToken(ctx, seed.Label, domain.Token{RefreshToken: seed.Token}); err != nil {
-		return fmt.Errorf("seed token %q:\n%w", seed.Label, err)
 	}
 	return nil
 }

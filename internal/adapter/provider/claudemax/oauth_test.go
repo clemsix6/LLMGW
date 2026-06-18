@@ -76,7 +76,7 @@ func successBody(access, refresh string, expiresIn int) string {
 
 // managerFor builds a token manager pointed at the stub base URL.
 func managerFor(store tokenStore, baseURL string) *tokenManager {
-	m := newTokenManager(store)
+	m := newTokenManager(store, "2.1.181")
 	m.baseURL = baseURL
 	return m
 }
