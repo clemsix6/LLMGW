@@ -3,6 +3,7 @@ package claudemax
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -61,28 +62,19 @@ type tokenManager struct {
 
 	baseURL string // baseURL is the OAuth endpoint base; injectable for tests.
 
+	claudeCodeVersion string // claudeCodeVersion is the spoofed client version the session-key bootstrap sends.
+
 	group singleflight.Group // group coalesces concurrent refreshes per account.
 }
 
 // newTokenManager builds a token manager backed by store, pointing at the real OAuth endpoint.
-func newTokenManager(store tokenStore) *tokenManager {
+func newTokenManager(store tokenStore, claudeCodeVersion string) *tokenManager {
 	return &tokenManager{
-		store:      store,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-		baseURL:    defaultAnthropicBaseURL,
+		store:             store,
+		httpClient:        &http.Client{Timeout: 30 * time.Second},
+		baseURL:           defaultAnthropicBaseURL,
+		claudeCodeVersion: claudeCodeVersion,
 	}
-}
-
-// Refresh exchanges a refresh token for a fresh token set against the real OAuth endpoint,
-// without any persistence. The E2E coordinator uses it to perform a single up-front refresh per
-// `go test` run: the refresh token rotates on every exchange (single-use), so the suite refreshes
-// once, shares the resulting access token, and writes the rotated refresh token back to .env.
-func Refresh(ctx context.Context, refreshToken string) (domain.Token, error) {
-	manager := &tokenManager{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-		baseURL:    defaultAnthropicBaseURL,
-	}
-	return manager.exchange(ctx, "coordinator", refreshToken)
 }
 
 // Valid returns a non-expired access token for the account, refreshing it if needed.
@@ -131,8 +123,17 @@ func (m *tokenManager) doRefresh(ctx context.Context, account string) (string, e
 		return current.AccessToken, nil
 	}
 
+	// No refresh token yet (freshly seeded account): bootstrap from the session key.
+	if current.RefreshToken == "" {
+		return m.bootstrapAndSave(ctx, account, current.SessionKey)
+	}
+
 	refreshed, err := m.exchange(ctx, account, current.RefreshToken)
 	if err != nil {
+		var dead *DeadRefreshTokenError
+		if errors.As(err, &dead) && current.SessionKey != "" {
+			return m.bootstrapAndSave(ctx, account, current.SessionKey) // self-heal from the session key
+		}
 		return "", err
 	}
 
@@ -140,6 +141,25 @@ func (m *tokenManager) doRefresh(ctx context.Context, account string) (string, e
 		return "", fmt.Errorf("persist rotated token for %q:\n%w", account, err)
 	}
 	return refreshed.AccessToken, nil
+}
+
+// bootstrapAndSave mints a fresh OAuth token set from the account's session key and persists it.
+// An empty session key means the account has no recoverable credential, surfaced as a dead-token
+// error so the operator re-seeds it.
+func (m *tokenManager) bootstrapAndSave(ctx context.Context, account, sessionKey string) (string, error) {
+	if sessionKey == "" {
+		return "", &DeadRefreshTokenError{Account: account}
+	}
+
+	token, err := bootstrapFromSession(ctx, m.httpClient, m.baseURL, m.claudeCodeVersion, sessionKey)
+	if err != nil {
+		return "", err
+	}
+
+	if err := m.store.SaveToken(ctx, account, token); err != nil {
+		return "", fmt.Errorf("persist bootstrapped token for %q:\n%w", account, err)
+	}
+	return token.AccessToken, nil
 }
 
 // exchange calls the OAuth token endpoint to swap a refresh token for a fresh token set.

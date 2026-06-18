@@ -94,6 +94,50 @@ func TestTokenRoundTrip(t *testing.T) {
 	assertTokenEqual(t, got, rotated)
 }
 
+// TestSeedSessionKeyAndOwnership proves the credential-ownership model: SeedSessionKey writes the
+// durable session_key once (never overwriting), LoadToken reads it back, and SaveToken (the
+// refresh/bootstrap writer) persists access/refresh WITHOUT clobbering session_key.
+func TestSeedSessionKeyAndOwnership(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	if err := store.SeedSessionKey(ctx, "acct", "sess-1"); err != nil {
+		t.Fatalf("SeedSessionKey: %v", err)
+	}
+
+	got, err := store.LoadToken(ctx, "acct")
+	if err != nil {
+		t.Fatalf("LoadToken: %v", err)
+	}
+	if got.SessionKey != "sess-1" {
+		t.Fatalf("session key = %q, want sess-1", got.SessionKey)
+	}
+	if got.AccessToken != "" || got.RefreshToken != "" {
+		t.Fatalf("freshly seeded token should carry no access/refresh, got %+v", got)
+	}
+
+	// Re-seeding never overwrites an existing row.
+	if err := store.SeedSessionKey(ctx, "acct", "sess-2"); err != nil {
+		t.Fatalf("SeedSessionKey (re-seed): %v", err)
+	}
+	if got, _ = store.LoadToken(ctx, "acct"); got.SessionKey != "sess-1" {
+		t.Fatalf("re-seed overwrote session key: got %q, want sess-1", got.SessionKey)
+	}
+
+	// SaveToken (a bootstrap/refresh result) persists access/refresh but must preserve session_key.
+	boot := domain.Token{AccessToken: "acc", RefreshToken: "ref", SessionKey: "ignored", ExpiresAt: time.Now().Add(time.Hour)}
+	if err := store.SaveToken(ctx, "acct", boot); err != nil {
+		t.Fatalf("SaveToken: %v", err)
+	}
+	got, _ = store.LoadToken(ctx, "acct")
+	if got.AccessToken != "acc" || got.RefreshToken != "ref" {
+		t.Fatalf("SaveToken did not persist derived tokens: %+v", got)
+	}
+	if got.SessionKey != "sess-1" {
+		t.Fatalf("SaveToken clobbered session key: got %q, want sess-1 (SaveToken must not own session_key)", got.SessionKey)
+	}
+}
+
 func TestWindowedTotals(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

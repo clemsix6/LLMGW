@@ -66,7 +66,7 @@ type Provider struct {
 // New builds a Claude Max provider over the accounts persisted in store, spoofing claudeCodeVersion.
 func New(store accountStore, claudeCodeVersion string) *Provider {
 	return &Provider{
-		tokens:     newTokenManager(store),
+		tokens:     newTokenManager(store, claudeCodeVersion),
 		spoof:      spoof{version: claudeCodeVersion},
 		store:      store,
 		httpClient: &http.Client{},

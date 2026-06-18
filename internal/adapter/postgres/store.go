@@ -112,15 +112,15 @@ func (s *Store) LoadToken(ctx context.Context, account string) (domain.Token, er
 	}
 
 	const query = `
-SELECT access_token, refresh_token, expires_at
+SELECT access_token, refresh_token, session_key, expires_at
 FROM oauth_token
 WHERE provider_id = $1 AND account_label = $2`
 
 	var token domain.Token
-	var access *string
+	var access, refresh, session *string
 	var expires *time.Time
 
-	err = s.pool.QueryRow(ctx, query, providerID, account).Scan(&access, &token.RefreshToken, &expires)
+	err = s.pool.QueryRow(ctx, query, providerID, account).Scan(&access, &refresh, &session, &expires)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Token{}, fmt.Errorf("load token %q:\n%w", account, domain.ErrTokenNotFound)
 	}
@@ -130,6 +130,12 @@ WHERE provider_id = $1 AND account_label = $2`
 
 	if access != nil {
 		token.AccessToken = *access
+	}
+	if refresh != nil {
+		token.RefreshToken = *refresh
+	}
+	if session != nil {
+		token.SessionKey = *session
 	}
 	if expires != nil {
 		token.ExpiresAt = *expires
@@ -156,6 +162,26 @@ ON CONFLICT (provider_id, account_label) DO UPDATE SET
 
 	if _, err := s.pool.Exec(ctx, query, providerID, account, t.AccessToken, t.RefreshToken, t.ExpiresAt); err != nil {
 		return fmt.Errorf("save token %q:\n%w", account, err)
+	}
+	return nil
+}
+
+// SeedSessionKey inserts an account's durable session key when the account has no row yet. It is
+// the seed path's sole writer for session_key (never overwriting an existing row), keeping that
+// column's ownership separate from SaveToken, which writes only the derived access/refresh tokens.
+func (s *Store) SeedSessionKey(ctx context.Context, account, sessionKey string) error {
+	providerID, err := s.defaultProviderID(ctx)
+	if err != nil {
+		return err
+	}
+
+	const query = `
+INSERT INTO oauth_token (provider_id, account_label, session_key, updated_at)
+VALUES ($1, $2, $3, now())
+ON CONFLICT (provider_id, account_label) DO NOTHING`
+
+	if _, err := s.pool.Exec(ctx, query, providerID, account, sessionKey); err != nil {
+		return fmt.Errorf("seed session key for %q:\n%w", account, err)
 	}
 	return nil
 }

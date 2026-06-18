@@ -1,0 +1,90 @@
+name: CI
+
+# Two jobs:
+#   - check: build, vet, gofmt, unit tests. Hermetic (Postgres via testcontainers, no Anthropic).
+#     Runs on every push and pull request.
+#   - e2e:   the real-API suite (test/e2e). It bootstraps Claude Code OAuth tokens from a claude.ai
+#     session key (LLMGW_TEST_SESSION_KEY) and talks to the live Anthropic backend. A session key is
+#     durable and does NOT rotate on use, so the secret stays valid across runs — no write-back, no
+#     PAT. It runs on main pushes and manual dispatch; PR runs would be safe too (the key is reusable)
+#     but are left off to avoid spending quota on every push.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Build, vet & unit tests
+    runs-on: ubuntu-latest
+    env:
+      # CI runners are ephemeral; the testcontainers reaper is unnecessary and flaky there.
+      TESTCONTAINERS_RYUK_DISABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt needed on:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: build
+        run: go build ./...
+
+      - name: unit tests
+        run: go test -race ./internal/... -count=1
+
+  e2e:
+    name: E2E (real Anthropic)
+    needs: check
+    # Only on main pushes and manual runs: keep real-API quota spend off every PR push.
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # Cheap insurance against two real-API runs overlapping; not strictly required (the key is reusable).
+    concurrency:
+      group: llmgw-realapi
+      cancel-in-progress: false
+    env:
+      TESTCONTAINERS_RYUK_DISABLED: "true"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Preflight — require session key
+        env:
+          SEED: ${{ secrets.LLMGW_TEST_SESSION_KEY }}
+        run: |
+          if [ -z "$SEED" ]; then
+            echo "::error::LLMGW_TEST_SESSION_KEY secret is empty — the real-API suite cannot run"
+            exit 1
+          fi
+
+      - name: Write .env
+        env:
+          SEED: ${{ secrets.LLMGW_TEST_SESSION_KEY }}
+        # The harness reads this to bootstrap OAuth tokens once and share them across the suite.
+        run: printf 'LLMGW_TEST_SESSION_KEY=%s\n' "$SEED" > .env
+
+      - name: E2E tests
+        run: |
+          set -a; . ./.env; set +a
+          go test ./test/e2e/... -count=1 -v

@@ -13,16 +13,16 @@ type Config struct {
 
 	PostgresDSN string // PostgresDSN is the connection string for the state database.
 
-	RefreshTokens []RefreshToken // RefreshTokens seeds the per-account OAuth refresh tokens.
+	SessionKeys []SessionKey // SessionKeys seeds the per-account claude.ai session keys that bootstrap OAuth tokens.
 
 	ClaudeCodeVersion string // ClaudeCodeVersion is the spoofed Claude Code client version.
 }
 
-// RefreshToken is a single seed OAuth refresh token bound to an account label.
-type RefreshToken struct {
+// SessionKey is a single seed claude.ai session key bound to an account label.
+type SessionKey struct {
 	Label string // Label identifies the account (e.g. "acct1").
 
-	Token string // Token is the seed OAuth refresh token for the account.
+	Key string // Key is the durable claude.ai session key (sk-ant-sid…) for the account.
 }
 
 const (
@@ -44,7 +44,7 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("load config:\n%w", errMissingDSN)
 	}
 
-	tokens, err := parseRefreshTokens(os.Getenv("LLMGW_OAUTH_REFRESH_TOKENS"))
+	keys, err := parseSessionKeys(os.Getenv("LLMGW_SESSION_KEYS"))
 	if err != nil {
 		return Config{}, fmt.Errorf("load config:\n%w", err)
 	}
@@ -52,7 +52,7 @@ func Load() (Config, error) {
 	return Config{
 		Listen:            valueOr(os.Getenv("LLMGW_LISTEN"), defaultListen),
 		PostgresDSN:       dsn,
-		RefreshTokens:     tokens,
+		SessionKeys:       keys,
 		ClaudeCodeVersion: valueOr(os.Getenv("LLMGW_CLAUDE_CODE_VERSION"), defaultClaudeCodeVersion),
 	}, nil
 }
@@ -65,32 +65,32 @@ func valueOr(value, fallback string) string {
 	return value
 }
 
-// parseRefreshTokens parses a comma-separated list of "label=token" pairs.
-// An empty input yields no tokens; a malformed pair returns an error.
-func parseRefreshTokens(raw string) ([]RefreshToken, error) {
+// parseSessionKeys parses a comma-separated list of "label=key" pairs.
+// An empty input yields no keys; a malformed pair returns an error.
+func parseSessionKeys(raw string) ([]SessionKey, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, nil
 	}
 
-	var tokens []RefreshToken
+	var keys []SessionKey
 	for _, pair := range strings.Split(raw, ",") {
-		token, err := parsePair(strings.TrimSpace(pair))
+		key, err := parsePair(strings.TrimSpace(pair))
 		if err != nil {
 			return nil, err
 		}
-		tokens = append(tokens, token)
+		keys = append(keys, key)
 	}
-	return tokens, nil
+	return keys, nil
 }
 
-// parsePair splits a single "label=token" pair into a RefreshToken.
-func parsePair(pair string) (RefreshToken, error) {
-	label, token, ok := strings.Cut(pair, "=")
-	label, token = strings.TrimSpace(label), strings.TrimSpace(token)
+// parsePair splits a single "label=key" pair into a SessionKey.
+func parsePair(pair string) (SessionKey, error) {
+	label, key, ok := strings.Cut(pair, "=")
+	label, key = strings.TrimSpace(label), strings.TrimSpace(key)
 
-	if !ok || label == "" || token == "" {
-		return RefreshToken{}, fmt.Errorf("invalid refresh token pair %q (want label=token)", pair)
+	if !ok || label == "" || key == "" {
+		return SessionKey{}, fmt.Errorf("invalid session key pair %q (want label=key)", pair)
 	}
-	return RefreshToken{Label: label, Token: token}, nil
+	return SessionKey{Label: label, Key: key}, nil
 }
