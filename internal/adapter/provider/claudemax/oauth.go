@@ -114,6 +114,11 @@ func (m *tokenManager) doRefresh(ctx context.Context, account string) (string, e
 		return "", fmt.Errorf("load token for %q:\n%w", account, err)
 	}
 
+	// A prior single-flight leader may have already refreshed; skip the redundant exchange.
+	if fresh(current) {
+		return current.AccessToken, nil
+	}
+
 	refreshed, err := m.exchange(ctx, account, current.RefreshToken)
 	if err != nil {
 		return "", err

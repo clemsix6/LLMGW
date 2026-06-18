@@ -73,19 +73,24 @@ RETURNING id`
 	return id, nil
 }
 
-// LoadToken returns the persisted OAuth token for an account label.
+// LoadToken returns the persisted OAuth token for an account label under the default provider.
 // It returns domain.ErrTokenNotFound when no row exists for the account.
 func (s *Store) LoadToken(ctx context.Context, account string) (domain.Token, error) {
+	providerID, err := s.defaultProviderID(ctx)
+	if err != nil {
+		return domain.Token{}, err
+	}
+
 	const query = `
 SELECT access_token, refresh_token, expires_at
 FROM oauth_token
-WHERE account_label = $1`
+WHERE provider_id = $1 AND account_label = $2`
 
 	var token domain.Token
 	var access *string
 	var expires *time.Time
 
-	err := s.pool.QueryRow(ctx, query, account).Scan(&access, &token.RefreshToken, &expires)
+	err = s.pool.QueryRow(ctx, query, providerID, account).Scan(&access, &token.RefreshToken, &expires)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Token{}, fmt.Errorf("load token %q:\n%w", account, domain.ErrTokenNotFound)
 	}
@@ -125,17 +130,16 @@ ON CONFLICT (provider_id, account_label) DO UPDATE SET
 	return nil
 }
 
-// defaultProviderID returns the id of the single V1 Claude Max provider, creating it if absent.
-// The oauth_token row requires a provider_id; V1 has exactly one provider.
+// defaultProviderID resolves the id of the single V1 Claude Max provider by name.
+// The provider row is seeded by migration 0002; this is a read-only lookup with no
+// write side-effect. Filtering token operations on it keeps them unambiguous if a
+// second provider is ever added.
 func (s *Store) defaultProviderID(ctx context.Context) (int64, error) {
-	const query = `
-INSERT INTO provider (name, type) VALUES ($1, $2)
-ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-RETURNING id`
+	const query = `SELECT id FROM provider WHERE name = $1`
 
 	var id int64
-	if err := s.pool.QueryRow(ctx, query, defaultProviderName, defaultProviderType).Scan(&id); err != nil {
-		return 0, fmt.Errorf("ensure default provider:\n%w", err)
+	if err := s.pool.QueryRow(ctx, query, defaultProviderName).Scan(&id); err != nil {
+		return 0, fmt.Errorf("resolve default provider %q:\n%w", defaultProviderName, err)
 	}
 	return id, nil
 }
