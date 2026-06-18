@@ -1,6 +1,6 @@
 # LLMGW — Design (V1)
 
-**Status:** approved design, pre-implementation
+**Status:** approved design, pre-implementation (revised after independent design review)
 **Date:** 2026-06-18
 
 ## 1. Purpose & context
@@ -26,113 +26,111 @@ It exists to:
 - **Replace clewdr** for the Anthropic/Claude-Max path with a maintained Go
   implementation that is not blocked by Anthropic's anti-abuse (see §9).
 
-**Origin:** TrueWallet's Processor drove all LLM traffic through clewdr (Claude Max
-via OAuth). Anthropic began returning `429 rate_limit_error` to clewdr's requests; a
-full investigation (see §9) showed the **account is healthy** and the request body is
-fine — the trigger is clewdr's **browser-TLS impersonation fingerprint**, and clewdr's
-**1-hour cooldown on any 429** turns each rejection into a total outage. LLMGW fixes
-both: a normal Go HTTP client (no flagged fingerprint) and budget-based pre-call rate
-control instead of a blunt cooldown.
+**Origin:** TrueWallet's Processor drove all LLM traffic through clewdr (Claude Max via
+OAuth). Anthropic began returning `429 rate_limit_error` to clewdr's requests; a full
+investigation (§9) showed the **account is healthy** and the request body is fine — the
+trigger is clewdr's **browser-TLS impersonation fingerprint**, compounded by clewdr's
+**1-hour cooldown on a no-reset 429** which turns each rejection into a long outage.
+LLMGW fixes both: a normal Go HTTP client (no flagged fingerprint) and budget-based
+pre-call rate control instead of a blunt cooldown.
 
 ## 2. Scope & non-goals
 
 **In scope (V1):**
 
 - Public API: Anthropic Messages surface (`POST /v1/messages`), full-control ("code")
-  semantics — consumer-supplied system prompt + tools.
+  semantics — consumer-supplied system prompt + tools. **Both non-streaming and streaming
+  (`stream:true`) are supported** — streaming is required for long generations.
 - One backend provider: **Claude Max via OAuth** (the clewdr `/code` path, reimplemented).
 - Per-`(project, tag)` usage tracking and budget limits (calls / tokens / cost),
-  hourly + daily windows, hard-block enforcement.
+  hourly + daily windows, hard-block enforcement, **concurrency-safe**.
 - Postgres-backed state (separate DB in the existing instance).
 
 **Non-goals (V1) — deliberately deferred:**
 
 - No auth / API keys / multi-tenant security. Binds `127.0.0.1`, trusted local traffic only.
 - No settings endpoints. Limits and routing are **rows in the DB, edited by hand**.
-- No OpenAI-compatible surface and no format translation (added with OpenRouter, V2+).
-- No request-body translation: the body is forwarded **verbatim** to the routed provider.
+- No OpenAI-compatible surface and no request/response format translation (added with
+  OpenRouter, V2+).
+
+The body is forwarded **unchanged except for a prepended Claude Code system block** (and a
+minimal required normalization set — see §9). It is otherwise not transformed: tools,
+function-calling, and content blocks pass through.
 
 ## 3. Architecture (hexagonal)
 
 - **Domain** (`internal/domain/...`): pure logic, no infra imports.
   - `project`: identity, auto-creation on first use.
-  - `budget`: limit definitions, window evaluation, enforcement decisions.
-  - `usage`: metering (tokens, cost, calls) from a provider response.
+  - `budget`: limit definitions, window evaluation, reservation + enforcement decisions.
+  - `usage`: metering (tokens, cost, calls) from a buffered response OR an SSE stream.
   - `routing`: choose a provider for a request.
   - Ports (interfaces) for: store, provider, clock.
 - **Adapters** (`internal/adapter/...`):
   - `postgres`: store implementation (projects, limits, counters, audit, oauth tokens, prices, routes).
   - `provider/claudemax`: Claude Max OAuth provider — token refresh, Claude Code spoof,
-    verbatim forward via stdlib `net/http`.
-  - `httpserver`: the `/v1/messages` surface, header parsing, error mapping.
+    forward (buffered + SSE relay) via stdlib `net/http`.
+  - `httpserver`: the `/v1/messages` surface, header parsing, SSE relay, error mapping.
 - **Composition root** (`cmd/llmgw`): config from env, wiring, server start.
 
 ## 4. Public API
 
-`POST /v1/messages` — drop-in Anthropic Messages. A consumer points any Anthropic SDK
-at LLMGW by changing `base_url`. The request **body is standard Anthropic** and is
-forwarded verbatim. Governance travels in **headers** (so the body stays compatible
-with any SDK/agent):
+`POST /v1/messages` — drop-in Anthropic Messages. A consumer points any Anthropic SDK at
+LLMGW by changing `base_url`. The request **body is standard Anthropic**. Governance
+travels in **headers** (so the body stays compatible with any SDK/agent):
 
 - `X-Project: <name>` — the project. **Auto-created** on first sighting; usage is tracked
-  against it immediately (limits apply only once configured).
+  immediately (limits apply only once configured).
 - `X-Tags: <tag>` — which part of the project (e.g. `news`). The budget bucket. Optional;
-  defaults to an empty/`default` tag.
+  defaults to a `default` tag.
 
-Example:
+`stream:true` is honored: LLMGW relays the provider's SSE to the consumer as it arrives
+(no buffering — streaming latency preserved) while tapping the stream to accumulate usage.
+Non-streaming returns the provider's JSON verbatim.
 
-```http
-POST http://127.0.0.1:<port>/v1/messages
-X-Project: truewallet
-X-Tags: news
-anthropic-version: 2023-06-01
-content-type: application/json
-
-{
-  "model": "claude-sonnet-4-6",
-  "max_tokens": 4096,
-  "system": "<consumer's own system prompt>",
-  "tools": [ { "name": "submit_topic", "input_schema": { ... } } ],
-  "messages": [ { "role": "user", "content": "..." } ]
-}
-```
-
-Response: the provider's response, verbatim. On a budget block, LLMGW returns a clear
-error **before** forwarding (HTTP 402 or 429 with a typed body) so the consumer can
-distinguish a budget stop from a provider error.
+On a budget block, LLMGW returns **HTTP 402** with a typed body **before** forwarding
+(402, not 429, so agent SDKs do not treat it as a retryable provider rate-limit). The body
+states which `(project, tag, dimension, window)` limit was hit.
 
 ## 5. Request lifecycle
 
 1. **Parse** `X-Project` (auto-create if new) and `X-Tags`.
-2. **Budget pre-check**: evaluate configured limits for `(project, tag)` against current
-   windowed counters. If any `block` limit is already met/exceeded → return 402/429,
-   do not forward.
-3. **Route**: resolve the provider for this request (V1: the single Claude Max provider).
-4. **Inject credentials**: provider adapter applies the Claude Code spoof and a valid
-   OAuth access token (refreshing if needed).
-5. **Forward verbatim** over stdlib `net/http` (normal TLS).
-6. **Meter**: read `usage` from the response; compute notional cost via `model_price`.
-7. **Record** a `usage_event` row (project, tag, model, provider, tokens, cost, status, latency).
-
-Enforcement nuance (physics, not a choice): **calls** and **input tokens** are known
-pre-call → blocked exactly. **Output tokens** and **cost** are known only post-response →
-enforced at crossing: the call that crosses completes, subsequent calls are blocked.
-For TrueWallet a `calls/hour` limit blocks exactly pre-call — the lever that prevents the
-429 storm that motivated this project.
+2. **Budget pre-check + reservation** (atomic): evaluate configured limits for
+   `(project, tag)` against current windowed counters **plus in-flight reservations**. If
+   any `block` limit is met/exceeded → return 402, do not forward. Otherwise record a
+   reservation (in-flight) so concurrent requests cannot collectively overshoot a `calls`
+   (or input-token) limit. Pre-call dimensions (`calls`, input tokens) are enforced exactly;
+   `cost`/output-token limits are enforced at crossing (the call that crosses completes,
+   subsequent calls block).
+3. **Route**: resolve the provider (V1: the single Claude Max provider).
+4. **Inject credentials**: provider applies the Claude Code spoof + a valid OAuth access
+   token (single-flight refresh if expired — see §9).
+5. **Forward** over stdlib `net/http`: buffered for non-streaming, SSE relay for streaming.
+6. **Meter**: non-streaming → read `usage` from the JSON; streaming → accumulate from
+   `message_start` (input) and `message_delta.usage` (output) events. Compute notional cost
+   via `model_price`.
+7. **Record** a `usage_event`, release the reservation, update counters.
 
 ## 6. Budget model
 
-- **Granularity:** limits are set per `(project, tag)`. `tag = NULL` applies to the whole project.
-- **Dimensions:** `calls`, `tokens`, `cost_usd` — any combination, multiple simultaneous.
-  Any single limit hit → block.
-- **Windows:** `hour` and `day` (both supported, per limit).
+- **Granularity:** limits per `(project, tag)`. `tag = NULL` applies to the whole project
+  (evaluated as a tag-agnostic aggregate).
+- **Dimensions:** `calls`, `tokens` (total = input + output unless a row specifies a side),
+  `cost_usd` — any combination, multiple simultaneous. Any single `block` limit hit → block.
+- **Windows:** **sliding** — `hour` = `ts >= now() - interval '1 hour'`, `day` =
+  `now() - interval '24 hours'`. (Chosen over calendar buckets: accurate for rate-limiting
+  and matches "max N per hour" intent.)
 - **Pricing (notional):** a `model_price` table (input/output USD per million tokens)
-  converts tokens → cost, applied uniformly. Claude Max usage is valued at the
-  equivalent API rate ("as if"), so a `cost_usd` budget meaningfully caps free-tier volume
-  and lets us compare against real spend. TrueWallet caps in `calls`; paid providers later
-  cap in `cost_usd`.
-- **Counters:** derived as windowed `SUM` over `usage_event` (no separate counter table to
-  keep in sync). Indexed on `(project_id, tag, ts)`.
+  converts tokens → cost, applied uniformly (Claude Max valued at the equivalent API rate).
+  **Unknown model** (no `model_price` row): cost-based limits cannot compute → the request
+  is **blocked** with a typed 402 (fail-closed; add the price row to unblock). `calls`/`tokens`
+  limits are unaffected.
+- **Counters:** windowed `SUM` over `usage_event` + in-flight reservations. Indexed on
+  `(project_id, tag, ts)`. `usage_event` has a **retention policy** (prune rows older than
+  the longest window + a margin, e.g. 35 days) so the table stays bounded; the hot-path
+  aggregate stays cheap.
+- **Concurrency:** the pre-check + reservation is atomic per `(project, tag, window)`
+  (a short transaction inserting a reservation, or a per-key advisory lock + in-process
+  semaphore), so simultaneous requests cannot collectively breach a limit.
 
 ## 7. Providers & routing
 
@@ -141,14 +139,22 @@ For TrueWallet a `calls/hour` limit blocks exactly pre-call — the lever that p
 - `route` rows map a request to a provider (by `model_pattern`, optionally per project).
   **V1: a single default route to the Claude Max provider.** The consumer sends a plain
   Anthropic `model` id; routing lives in the DB (editable like budgets).
-- Migration path: adding the **Anthropic API key** provider is transparent (same Messages
+- **Multi-account & exhaustion (V1):** the Claude Max provider may hold several accounts
+  (round-robin). On a provider `429`, the account is put on cooldown **honoring Anthropic's
+  reset timestamp** when present (`anthropic-ratelimit-unified-reset` / `resetsAt`), else a
+  short backoff (seconds–minutes, **never the 1h clewdr default**). When **all** accounts are
+  cooling, LLMGW returns **HTTP 503 + `Retry-After`** so the consumer backs off cleanly.
+  Pre-call budget limits are the primary mechanism that keeps us under the 429 threshold in
+  the first place.
+- Migration path: adding the **Anthropic API-key** provider is transparent (same Messages
   format, only credentials change). **OpenRouter** (V2) adds any LLM and motivates the
-  optional OpenAI-compatible surface + translation — isolated, added when needed.
+  optional OpenAI-compatible surface + translation.
 
 ## 8. Storage (Postgres)
 
-A dedicated database (e.g. `llmgw`) inside the existing Postgres instance. Configuration
-is done by editing rows directly (no settings API); agents can investigate via SQL.
+A dedicated database (e.g. `llmgw`) inside the existing Postgres instance. Configuration is
+done by editing rows directly (no settings API); agents can investigate via SQL. Schema is
+managed by versioned SQL migrations (a `migrations/` dir, applied on deploy).
 
 ```sql
 -- config (edited by hand)
@@ -162,61 +168,82 @@ route(id, project_id NULL, model_pattern, provider_id)
 model_price(model, input_usd_per_mtok, output_usd_per_mtok)
 
 -- runtime state (written by the gateway)
-oauth_token(provider_id, access_token, refresh_token, expires_at, updated_at)  -- ROTATES; persisted
+oauth_token(provider_id, account_label, access_token, refresh_token,
+            expires_at, cooldown_until, updated_at)   -- refresh_token ROTATES; persisted
 usage_event(id, ts, project_id, tag, model, provider,
             input_tokens, output_tokens, cost_usd, status, latency_ms, error)
+reservation(id, project_id, tag, created_at, expires_at)  -- in-flight, counted in pre-check; TTL-cleaned
 ```
 
 ## 9. Claude Max OAuth backend — verified facts
 
-The V1 provider reimplements clewdr's working `/code` path in Go. All of the following
-was verified live against the production credentials during the investigation.
+The V1 provider reimplements clewdr's working `/code` path in Go. Below, **(source)** =
+confirmed in the clewdr source `/tmp/clewdr-src`; **(probe)** = verified by live request
+during the investigation (not derivable from source).
 
 **OAuth (refresh):**
 
-- Token endpoint: `POST https://api.anthropic.com/v1/oauth/token`, **form-encoded**.
-- Claude Code OAuth `client_id`: `9d1c250a-e61b-44d9-88ed-5944d1962f5e`.
-- Body: `grant_type=refresh_token`, `refresh_token=<…>`, `client_id=<…>`; headers
-  `anthropic-version: 2023-06-01`, `anthropic-beta: oauth-2025-04-20`.
-- Response includes `access_token`, **a rotated `refresh_token`**, `expires_in` (28800 = 8h).
-- ⇒ The rotated `refresh_token` **must be persisted** (Postgres `oauth_token`), seeded
-  from env on first run, updated on every refresh. Env alone breaks on the 2nd refresh.
+- Endpoint `POST https://api.anthropic.com/v1/oauth/token`, **form-encoded** (source:
+  `constants.rs:19`, `exchange.rs` `AuthType::RequestBody`).
+- `grant_type=refresh_token`, `client_id=9d1c250a-e61b-44d9-88ed-5944d1962f5e` (source:
+  `constants.rs:18`); headers `anthropic-version: 2023-06-01`, `anthropic-beta: oauth-2025-04-20`
+  (source: `exchange.rs:56-63`).
+- Response includes `access_token`, a **rotated `refresh_token`**, `expires_in` (probe: 28800 = 8h).
+- **Persistence + crash-safety:** persist the rotated `refresh_token` (Postgres `oauth_token`),
+  seeded from env on first run. Refresh must be **single-flight per account** (advisory lock /
+  mutex) so two requests don't replay an already-rotated token (→ `invalid_grant`). Commit the
+  new token **in the same transaction, before first use**, so a crash mid-refresh cannot lose
+  it. LLMGW is refresh-only (no interactive re-auth like clewdr's `exchange.rs:258-296`); a dead
+  `refresh_token` requires a **manual re-seed** (documented runbook).
 
-**Spoof (Claude Code surface), proven to return 200:**
+**Spoof (Claude Code surface):**
 
-- `POST https://api.anthropic.com/v1/messages`, `Authorization: Bearer <access_token>`.
-- Headers: `User-Agent: claude-code/2.1.76`, `anthropic-beta: oauth-2025-04-20`,
-  `anthropic-version: 2023-06-01`.
-- System: the consumer's own system blocks, prefixed with EITHER the Claude Code identity
-  (`"You are Claude Code, Anthropic's official CLI for Claude."`) OR a billing-header
-  system block (`x-anthropic-billing-header: cc_version=2.1.76.<hash>; cc_entrypoint=cli; cch=00000;`).
-  A request to this OAuth surface **without** any such marker returns `429 rate_limit_error`
-  (deterministic, not rate). Anthropic does not validate the billing hash (any value passes).
-- Verified: with the spoof, requests succeed (200) with custom system + tools + large
-  context + opus or sonnet, single or concurrent. The account's usage is low and healthy.
+- `POST https://api.anthropic.com/v1/messages`, `Authorization: Bearer <access_token>`,
+  `User-Agent: claude-code/2.1.76`, `anthropic-beta: oauth-2025-04-20`,
+  `anthropic-version: 2023-06-01` (source: `chat.rs:139-142`, `constants.rs:22`).
+- clewdr prepends a **billing-header system block** on the `/code` path
+  (`x-anthropic-billing-header: cc_version=2.1.76.<hash>; cc_entrypoint=cli; cch=00000;`)
+  (source: `request.rs:119-136`, injected `:362-373`). The hash is a SHA-256 of sampled
+  first-user-message bytes + salt + version; **replicate clewdr's exact computation** (do not
+  send a placeholder — Anthropic may tighten validation; clewdr's author treats it as load-bearing).
+- (probe) A request to the OAuth surface **without** a Claude Code marker (billing block or the
+  identity system `"You are Claude Code, Anthropic's official CLI for Claude."`) returns
+  `429 rate_limit_error`; **with** a marker it returns 200 (incl. custom system + tools + large
+  context + opus/sonnet, single & concurrent). The account's usage is low and healthy. Note:
+  clewdr itself injects only the billing block (the identity string is the real CC CLI's prompt);
+  LLMGW will use the billing block.
 
-**Why clewdr fails (and what we drop):** by elimination, the only difference between a
-passing stdlib request and clewdr's failing one is clewdr's **`wreq` browser-TLS
-impersonation fingerprint**, which Anthropic's anti-abuse flags → `429`. A normal Go
-`net/http` client (plain TLS, like `curl`) passes. We therefore **drop**: the TLS
-impersonation, the web/chat surface, the dead `skip_rate_limit` flag, and especially the
-**hardcoded 1-hour cooldown on a no-reset 429** (`error.rs`: `now + 3600`) — replaced by
-LLMGW's pre-call budget control, which prevents the 429 rather than over-punishing it.
+**Streaming:**
 
-**Caveat:** this remains a Claude-Code spoof on Max accounts — clean and unflagged today,
-but out-of-band for Anthropic; the API-key / OpenRouter providers are the durable exit.
+- clewdr handles both modes (source: `chat.rs:320-328`); for `stream:true` it relays the SSE
+  while accumulating output tokens from `message_delta` events (source: `forward_stream_with_usage`,
+  `chat.rs:346-401`). LLMGW must do the same: **relay SSE unbuffered + accumulate usage** so cost
+  / output-token budgets stay correct for streaming consumers.
 
-## 10. Phasing
+**Why clewdr fails (and what we drop):** by elimination the only difference between a passing
+stdlib request and clewdr's failing one is clewdr's **`wreq` browser-TLS impersonation**
+(source: `Cargo.toml` `wreq`, `utils/mod.rs` `Emulation::Chrome145`), which Anthropic's
+anti-abuse flags → `429`. A normal Go `net/http` client passes (probe). We **drop**: the TLS
+impersonation, the web/chat surface, the dead `skip_rate_limit` flag, and the **1-hour
+cooldown on a no-reset 429** (source: `error.rs:400` `now + 3600`; applied only when no reset
+time is present, `:380-402`) — replaced by §6/§7 budget + per-account reset-aware cooldown.
 
-- **V1:** Anthropic Messages surface + Claude Max OAuth provider (clewdr-in-Go, fixed) +
-  per-`(project, tag)` budget (calls/tokens/cost, hourly/daily, hard-block) + Postgres.
-  Resolves TrueWallet's outage and removes clewdr.
+**Caveat:** this remains a Claude-Code spoof on Max accounts — clean and unflagged today, but
+out-of-band for Anthropic; the API-key / OpenRouter providers are the durable exit.
+
+## 10. Phasing & build order
+
+- **V1** (resolves TrueWallet's outage, removes clewdr), built in risk-reducing slices:
+  1. **Passthrough proxy**: `/v1/messages` (non-streaming + streaming) → Claude Max OAuth,
+     single account, spoof + single-flight refresh. Kills clewdr / ends the outage.
+  2. **Metering**: `usage_event` recording + `model_price`.
+  3. **Budget**: limit evaluation + atomic reservation + 402 blocking (calls/tokens/cost, hourly/daily).
+  4. **Multi-account** rotation + reset-aware cooldown + all-cooling 503.
 - **V2+:** Anthropic API-key provider (transparent migration); then OpenRouter for any LLM,
   with an optional OpenAI-compatible surface + format translation when an OpenAI-native
   consumer must reach an Anthropic backend.
 
 ## 11. Open questions
 
-- Port number and exact env var names (`ANTHROPIC_OAUTH_REFRESH_TOKENS` seed, Postgres DSN).
-- Multi-account rotation policy detail (round-robin; behaviour when all accounts 429).
-- Whether `warn`-action limits emit a log only or also a metric (observability target TBD).
+- Listen port + exact env var names (`ANTHROPIC_OAUTH_REFRESH_TOKENS` seed, Postgres DSN).
+- Deploy mechanics alongside TrueWallet (compose entry, migration application on deploy).
