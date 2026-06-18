@@ -1,7 +1,10 @@
 services:
   llmgw:
+    # Prod deploy pulls a pinned image from GHCR: `LLMGW_IMAGE_TAG=v0.1.0 docker compose pull && up -d`
+    # (released by .github/workflows/release.yml on a vX.Y.Z tag). `build: .` is kept for LOCAL dev:
+    # `docker compose up --build` builds the source and tags it as this image name.
+    image: ghcr.io/clemsix6/llmgw:${LLMGW_IMAGE_TAG:-latest}
     build: .
-    image: llmgw:latest
     container_name: llmgw
     restart: unless-stopped
 

@@ -43,10 +43,16 @@ Every variable is documented in [`.env.example`](.env.example).
 ### 3. Run
 
 ```sh
-docker compose up -d --build
+# Prod: pull a released image from GHCR (reproducible; rollback = redeploy the previous tag).
+LLMGW_IMAGE_TAG=v0.1.0 docker compose pull && docker compose up -d
+# Local dev: build from source instead — docker compose up -d --build
+
 docker compose logs -f llmgw    # watch for "llmgw listening on ..." and the migration log
 curl -s http://127.0.0.1:8088/health   # -> ok
 ```
+
+Released images are built and pushed to `ghcr.io/clemsix6/llmgw:<version>` by
+`.github/workflows/release.yml` on every `vX.Y.Z` git tag.
 
 The compose service publishes the gateway on **`127.0.0.1:8088` only** (host loopback). Inside the
 container the app binds `0.0.0.0` (`LLMGW_LISTEN`); the `127.0.0.1:` publish prefix is what keeps it
