@@ -49,13 +49,3 @@ func (s *Store) ReleaseReservation(ctx context.Context, reservationID int64) err
 func (s *Store) InflightTotals(ctx context.Context, projectID int64, tag string) (domain.Totals, error) {
 	return domain.Totals{}, errNotImplemented
 }
-
-// LoadToken is implemented in Batch 1.
-func (s *Store) LoadToken(ctx context.Context, account string) (domain.Token, error) {
-	return domain.Token{}, errNotImplemented
-}
-
-// SaveToken is implemented in Batch 1.
-func (s *Store) SaveToken(ctx context.Context, account string, t domain.Token) error {
-	return errNotImplemented
-}

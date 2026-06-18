@@ -2,12 +2,17 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 
 	"github.com/clemsix6/LLMGW/internal/domain/llm"
 	"github.com/clemsix6/LLMGW/internal/domain/usage"
 )
+
+// ErrTokenNotFound is returned by Store.LoadToken when no token exists for the account.
+// Callers use it to decide whether to seed a token from configuration.
+var ErrTokenNotFound = errors.New("oauth token not found")
 
 // Clock abstracts the current time so windowed budget logic can be tested deterministically.
 type Clock interface {

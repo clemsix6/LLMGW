@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/clemsix6/LLMGW/internal/domain"
@@ -12,6 +14,14 @@ import (
 
 // errNotImplemented is returned by store methods built in later batches.
 var errNotImplemented = errors.New("not implemented")
+
+const (
+	// defaultProviderName identifies the single Claude Max provider used in V1.
+	defaultProviderName = "claude_max"
+
+	// defaultProviderType is the backend type of the V1 Claude Max OAuth provider.
+	defaultProviderType = "claude_max_oauth"
+)
 
 // compile-time assertion that Store satisfies the domain port.
 var _ domain.Store = (*Store)(nil)
@@ -59,6 +69,73 @@ RETURNING id`
 	var id int64
 	if err := s.pool.QueryRow(ctx, query, name).Scan(&id); err != nil {
 		return 0, fmt.Errorf("ensure project %q:\n%w", name, err)
+	}
+	return id, nil
+}
+
+// LoadToken returns the persisted OAuth token for an account label.
+// It returns domain.ErrTokenNotFound when no row exists for the account.
+func (s *Store) LoadToken(ctx context.Context, account string) (domain.Token, error) {
+	const query = `
+SELECT access_token, refresh_token, expires_at
+FROM oauth_token
+WHERE account_label = $1`
+
+	var token domain.Token
+	var access *string
+	var expires *time.Time
+
+	err := s.pool.QueryRow(ctx, query, account).Scan(&access, &token.RefreshToken, &expires)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.Token{}, fmt.Errorf("load token %q:\n%w", account, domain.ErrTokenNotFound)
+	}
+	if err != nil {
+		return domain.Token{}, fmt.Errorf("load token %q:\n%w", account, err)
+	}
+
+	if access != nil {
+		token.AccessToken = *access
+	}
+	if expires != nil {
+		token.ExpiresAt = *expires
+	}
+	return token, nil
+}
+
+// SaveToken upserts the OAuth token for an account label under the default provider.
+// It never touches cooldown_until (owned by the provider pool, a later batch).
+func (s *Store) SaveToken(ctx context.Context, account string, t domain.Token) error {
+	providerID, err := s.defaultProviderID(ctx)
+	if err != nil {
+		return err
+	}
+
+	const query = `
+INSERT INTO oauth_token (provider_id, account_label, access_token, refresh_token, expires_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, now())
+ON CONFLICT (provider_id, account_label) DO UPDATE SET
+    access_token  = EXCLUDED.access_token,
+    refresh_token = EXCLUDED.refresh_token,
+    expires_at    = EXCLUDED.expires_at,
+    updated_at    = now()`
+
+	if _, err := s.pool.Exec(ctx, query, providerID, account, t.AccessToken, t.RefreshToken, t.ExpiresAt); err != nil {
+		return fmt.Errorf("save token %q:\n%w", account, err)
+	}
+	return nil
+}
+
+// defaultProviderID returns the id of the single V1 Claude Max provider, creating it if absent.
+// The oauth_token row requires a provider_id; V1 has exactly one provider.
+func (s *Store) defaultProviderID(ctx context.Context) (int64, error) {
+	const query = `
+INSERT INTO provider (name, type) VALUES ($1, $2)
+ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+RETURNING id`
+
+	var id int64
+	if err := s.pool.QueryRow(ctx, query, defaultProviderName, defaultProviderType).Scan(&id); err != nil {
+		return 0, fmt.Errorf("ensure default provider:\n%w", err)
 	}
 	return id, nil
 }
