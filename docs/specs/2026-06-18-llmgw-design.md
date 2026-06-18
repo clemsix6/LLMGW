@@ -243,7 +243,51 @@ out-of-band for Anthropic; the API-key / OpenRouter providers are the durable ex
   with an optional OpenAI-compatible surface + format translation when an OpenAI-native
   consumer must reach an Anthropic backend.
 
-## 11. Open questions
+## 11. Testing (E2E-first)
+
+**Principle: every feature is covered by end-to-end tests** that drive the real gateway over
+its HTTP API and assert on both the response and the persisted state.
+
+Harness:
+
+- **Real gateway** — the actual server, booted in-process on a random local port.
+- **Real Postgres** — an ephemeral DB (testcontainers-go, or a provided test DSN) with
+  migrations applied, so the budget-aggregation SQL is exercised for real, not mocked.
+- **Fake upstream provider** — an in-test HTTP server mimicking Anthropic's `/v1/messages`
+  (+ `/v1/oauth/token`). Programmable per test: canned responses with controllable `usage`,
+  SSE streaming, injectable `429`/errors, and it **records the requests it received** (to assert
+  the gateway sent the Claude Code headers + billing-header system block). Keeps E2E
+  deterministic, fast, quota-free, and able to simulate failures.
+- **Gated live smoke** (`LLMGW_LIVE_SMOKE=1`, off in CI) — a couple of real calls against the
+  actual Claude Max backend to confirm the spoof/OAuth still work against Anthropic.
+
+Coverage matrix (each item = an E2E test asserting response **and** DB state):
+
+- Non-streaming happy path: 200, body returned, `usage_event` recorded with correct tokens +
+  notional cost, counters updated.
+- Streaming happy path: `stream:true` → SSE relayed to the client, usage accumulated from
+  `message_start`/`message_delta`, `usage_event` recorded.
+- Project auto-creation: a new `X-Project` creates a `project` row and is tracked.
+- Tag bucketing: usage attributed to the correct `(project, tag)`.
+- Budget limits, per dimension × window — `calls` / `tokens` / `cost_usd` over `hour` / `day`:
+  under limit passes; at/over → 402 with a typed body naming the limit.
+- Concurrency safety: N concurrent requests against a near-limit `calls` cap → exactly the cap
+  pass, the rest 402 (no overshoot).
+- Cost-at-crossing: the crossing call completes; the next is blocked.
+- Unknown model: fail-closed 402 for cost limits; `calls`/`tokens` limits unaffected.
+- Spoof injection: the fake provider asserts it received `User-Agent: claude-code/2.1.76`, the
+  betas, and the prepended billing-header system block.
+- OAuth refresh: expired access token → single-flight refresh against the fake token endpoint →
+  request proceeds; rotated `refresh_token` persisted; two concurrent expired requests trigger
+  exactly one refresh call.
+- Provider `429` → account cooldown honoring the reset header; all accounts cooling → 503 +
+  `Retry-After`.
+- `warn`-action limit: not blocked, but recorded/observable.
+
+Domain unit tests complement E2E for pure budget arithmetic edge cases (window boundaries,
+mixed dimensions); E2E is the backbone.
+
+## 12. Open questions
 
 - Listen port + exact env var names (`ANTHROPIC_OAUTH_REFRESH_TOKENS` seed, Postgres DSN).
 - Deploy mechanics alongside TrueWallet (compose entry, migration application on deploy).

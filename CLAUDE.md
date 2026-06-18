@@ -80,6 +80,18 @@ the code is its own structure documentation.
 
 Keep the domain ignorant of HTTP, SQL, and any provider's wire format.
 
+## Testing (E2E-first, CRUCIAL)
+
+- **Every feature MUST be covered by end-to-end tests** that drive the real gateway over its
+  HTTP API and assert on both the response and the persisted DB state.
+- E2E harness: real gateway + real ephemeral Postgres (migrations applied) + a programmable
+  **fake upstream provider** (canned/streamed responses, injectable failures, records the
+  requests it received). Deterministic and quota-free — **no real-provider calls in CI**.
+- A gated live-smoke suite (`LLMGW_LIVE_SMOKE=1`, off by default) hits the real backend to
+  confirm the spoof/OAuth still work.
+- Domain unit tests cover pure-logic edge cases (budget arithmetic, window boundaries); E2E is
+  the backbone, not an afterthought.
+
 ## Git Workflow
 
 - `main` is the only long-lived branch. Never push to `main` directly.
