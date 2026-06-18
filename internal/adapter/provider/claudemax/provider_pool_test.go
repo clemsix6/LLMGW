@@ -34,6 +34,14 @@ import (
 // account; its usage proves the response was metered.
 const stub200JSON = `{"id":"msg_stub","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":3}}`
 
+// stubUsageExhaustedJSON is Anthropic's "out of extra usage" 400 — an account-specific budget
+// exhaustion the provider must cool + fail over (not surface).
+const stubUsageExhaustedJSON = `{"type":"error","error":{"type":"invalid_request_error","message":"You're out of extra usage. Add more at claude.ai/settings/usage and keep going."}}`
+
+// stubBadRequestJSON is a request-level 400 (not usage) the provider must surface unchanged,
+// without cooling or failing over (it would fail on every account).
+const stubBadRequestJSON = `{"type":"error","error":{"type":"invalid_request_error","message":"messages: at least one message is required"}}`
+
 // TestProviderPool runs the pool's cooldown/rotation scenarios against one Postgres container,
 // clearing the seeded accounts between subtests so each starts from a clean pool.
 func TestProviderPool(t *testing.T) {
@@ -157,6 +165,140 @@ func TestProviderPool(t *testing.T) {
 			t.Fatal("acct-a should be cooling after its 429 on the streaming path")
 		}
 	})
+
+	t.Run("UsageExhaustedCoolsAccountAndNextServes", func(t *testing.T) {
+		clearAccounts(t, ctx, dsn)
+		seedAccount(t, ctx, store, "acct-a", "tok-a")
+		seedAccount(t, ctx, store, "acct-b", "tok-b")
+
+		stub := newStubUpstream(t)
+		stub.usageExhausted("tok-a") // a is out of extra usage; b still serves
+
+		provider := poolProvider(store, stub.url())
+		metered, err := provider.Send(ctx, poolRequest(t, false), &recordingSink{})
+		if err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+		if metered.InputTokens != 5 || metered.OutputTokens != 3 {
+			t.Fatalf("usage = %+v, want {5, 3} (acct-b's 200)", metered)
+		}
+		if got := stub.seenBearers(); len(got) != 2 || got[0] != "tok-a" || got[1] != "tok-b" {
+			t.Fatalf("bearers = %v, want [tok-a tok-b] (a exhausted, failed over to b)", got)
+		}
+
+		accounts := loadAccounts(t, ctx, store)
+		if cooldownOf(accounts, "acct-a").IsZero() {
+			t.Fatal("acct-a should be cooling after 'out of extra usage'")
+		}
+		if cd := cooldownOf(accounts, "acct-b"); !cd.IsZero() {
+			t.Fatalf("acct-b cooldown = %v, want zero (it served)", cd)
+		}
+	})
+
+	t.Run("AllExhaustedReturnsAllCoolingError", func(t *testing.T) {
+		clearAccounts(t, ctx, dsn)
+		seedAccount(t, ctx, store, "acct-a", "tok-a")
+		seedAccount(t, ctx, store, "acct-b", "tok-b")
+
+		stub := newStubUpstream(t)
+		stub.usageExhausted("tok-a")
+		stub.usageExhausted("tok-b")
+
+		provider := poolProvider(store, stub.url())
+		_, err := provider.Send(ctx, poolRequest(t, false), &recordingSink{})
+		var allCooling *AllCoolingError
+		if !errors.As(err, &allCooling) {
+			t.Fatalf("Send error = %v, want *AllCoolingError (both exhausted)", err)
+		}
+		if cooldownOf(loadAccounts(t, ctx, store), "acct-a").IsZero() {
+			t.Fatal("acct-a should be cooling after exhaustion")
+		}
+	})
+
+	t.Run("RequestLevel400IsSurfacedNotFailedOver", func(t *testing.T) {
+		clearAccounts(t, ctx, dsn)
+		seedAccount(t, ctx, store, "acct-a", "tok-a")
+		seedAccount(t, ctx, store, "acct-b", "tok-b")
+
+		stub := newStubUpstream(t)
+		stub.failRequest("tok-a") // a malformed-request 400 — not account-specific
+
+		provider := poolProvider(store, stub.url())
+		_, err := provider.Send(ctx, poolRequest(t, false), &recordingSink{})
+
+		var upstream *UpstreamError
+		if !errors.As(err, &upstream) || upstream.Status != http.StatusBadRequest {
+			t.Fatalf("Send error = %v, want *UpstreamError status 400 (surfaced, not failed over)", err)
+		}
+		if got := stub.seenBearers(); len(got) != 1 || got[0] != "tok-a" {
+			t.Fatalf("bearers = %v, want [tok-a] (no failover on a request-level 400)", got)
+		}
+		if cd := cooldownOf(loadAccounts(t, ctx, store), "acct-a"); !cd.IsZero() {
+			t.Fatalf("acct-a cooldown = %v, want zero (request-level error must not cool)", cd)
+		}
+	})
+
+	t.Run("RoundRobinDistributesAcrossAccounts", func(t *testing.T) {
+		clearAccounts(t, ctx, dsn)
+		seedAccount(t, ctx, store, "acct-a", "tok-a")
+		seedAccount(t, ctx, store, "acct-b", "tok-b")
+		seedAccount(t, ctx, store, "acct-c", "tok-c")
+
+		stub := newStubUpstream(t) // all healthy → each Send served by its rotation start
+		provider := poolProvider(store, stub.url())
+
+		for i := 0; i < 6; i++ {
+			if _, err := provider.Send(ctx, poolRequest(t, false), &recordingSink{}); err != nil {
+				t.Fatalf("Send %d: %v", i, err)
+			}
+		}
+
+		want := []string{"tok-a", "tok-b", "tok-c", "tok-a", "tok-b", "tok-c"}
+		if got := stub.seenBearers(); !equalStrings(got, want) {
+			t.Fatalf("bearers = %v, want %v (strict round-robin, one account per request)", got, want)
+		}
+	})
+
+	t.Run("StreamingUsageExhaustedFailsOver", func(t *testing.T) {
+		clearAccounts(t, ctx, dsn)
+		seedAccount(t, ctx, store, "acct-a", "tok-a")
+		seedAccount(t, ctx, store, "acct-b", "tok-b")
+
+		stub := newStubUpstream(t)
+		stub.usageExhausted("tok-a") // a exhausted on the streaming path; b streams
+
+		provider := poolProvider(store, stub.url())
+		sink := &recordingSink{}
+		metered, err := provider.Send(ctx, poolRequest(t, true), sink)
+		if err != nil {
+			t.Fatalf("Send (stream): %v", err)
+		}
+		if metered.OutputTokens != 21 {
+			t.Fatalf("stream usage output = %d, want 21 (acct-b's canned stream)", metered.OutputTokens)
+		}
+		if !strings.Contains(sink.buf.String(), "message_stop") {
+			t.Fatalf("relayed stream missing terminal event: %q", sink.buf.String())
+		}
+		if got := stub.seenBearers(); len(got) != 2 || got[1] != "tok-b" {
+			t.Fatalf("bearers = %v, want acct-b to serve the stream after a's exhaustion", got)
+		}
+		if cooldownOf(loadAccounts(t, ctx, store), "acct-a").IsZero() {
+			t.Fatal("acct-a should be cooling after exhaustion on the streaming path")
+		}
+	})
+}
+
+// equalStrings reports whether two string slices are element-wise equal.
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // stubUpstream is a fake Anthropic Messages endpoint for forced-failure tests: it 429s the bearers
@@ -169,6 +311,10 @@ type stubUpstream struct {
 
 	rateLimited map[string]string // rateLimited maps a bearer → reset header value (""=none); presence ⇒ 429.
 
+	exhausted map[string]bool // exhausted marks bearers that get a 400 "out of extra usage".
+
+	badRequest map[string]bool // badRequest marks bearers that get a 400 request-level error (not usage).
+
 	bearers []string // bearers records the access token of each handled request, in order.
 }
 
@@ -176,7 +322,7 @@ type stubUpstream struct {
 func newStubUpstream(t *testing.T) *stubUpstream {
 	t.Helper()
 
-	stub := &stubUpstream{rateLimited: map[string]string{}}
+	stub := &stubUpstream{rateLimited: map[string]string{}, exhausted: map[string]bool{}, badRequest: map[string]bool{}}
 	stub.server = httptest.NewServer(http.HandlerFunc(stub.handle))
 	t.Cleanup(stub.server.Close)
 	return stub
@@ -190,6 +336,20 @@ func (s *stubUpstream) rateLimit(bearer, resetHeader string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.rateLimited[bearer] = resetHeader
+}
+
+// usageExhausted marks a bearer to receive a 400 "out of extra usage" (its budget is spent).
+func (s *stubUpstream) usageExhausted(bearer string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.exhausted[bearer] = true
+}
+
+// failRequest marks a bearer to receive a 400 request-level error (not usage exhaustion).
+func (s *stubUpstream) failRequest(bearer string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.badRequest[bearer] = true
 }
 
 // seenBearers returns a copy of the bearers handled so far, in order.
@@ -207,6 +367,8 @@ func (s *stubUpstream) handle(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	s.bearers = append(s.bearers, bearer)
 	reset, limited := s.rateLimited[bearer]
+	exhausted := s.exhausted[bearer]
+	bad := s.badRequest[bearer]
 	s.mu.Unlock()
 
 	if limited {
@@ -215,6 +377,18 @@ func (s *stubUpstream) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		w.WriteHeader(http.StatusTooManyRequests)
 		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error"}}`))
+		return
+	}
+
+	if exhausted {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(stubUsageExhaustedJSON))
+		return
+	}
+
+	if bad {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(stubBadRequestJSON))
 		return
 	}
 

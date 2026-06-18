@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"time"
 
 	"github.com/clemsix6/LLMGW/internal/domain"
 	"github.com/clemsix6/LLMGW/internal/domain/usage"
@@ -24,13 +23,11 @@ func handleStreamResponse(resp *http.Response, out domain.StreamSink) (usage.Usa
 }
 
 // streamStatusError reads the upstream body and maps a non-200 streaming response to a typed
-// error (a rate limit carries the reset time when present).
+// error via the shared classifier, so the streaming path detects rate limits and extra-usage
+// exhaustion exactly like the buffered path.
 func streamStatusError(resp *http.Response) error {
 	body, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return &RateLimitError{ResetAt: parseResetAt(resp.Header, time.Now())}
-	}
-	return &UpstreamError{Status: resp.StatusCode, Body: string(body)}
+	return classifyUpstream(resp.StatusCode, resp.Header, body)
 }
 
 // relayStream copies the upstream SSE stream to out unbuffered — flushing after each event so

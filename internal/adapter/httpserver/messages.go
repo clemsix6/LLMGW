@@ -253,6 +253,12 @@ func writeProviderError(w http.ResponseWriter, err error) {
 		return
 	}
 
+	var exhausted *claudemax.UsageExhaustedError
+	if errors.As(err, &exhausted) {
+		writeError(w, http.StatusServiceUnavailable, "usage_exhausted", exhausted.Error())
+		return
+	}
+
 	var upstream *claudemax.UpstreamError
 	if errors.As(err, &upstream) {
 		writeError(w, upstreamStatus(upstream.Status), "upstream_error", upstream.Error())

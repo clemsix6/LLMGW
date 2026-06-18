@@ -9,9 +9,21 @@ import (
 	"github.com/clemsix6/LLMGW/internal/domain"
 )
 
-// defaultCooldown is applied to an account on a 429 that carries no reset hint. It is deliberately
-// short (never clewdr's 1h) so a transient limit clears quickly and the account returns to the pool.
-const defaultCooldown = 60 * time.Second
+const (
+	// defaultCooldown is applied on a 429 with no reset hint and on transient upstream failures
+	// (5xx / auth). Deliberately short (never clewdr's 1h) so a transient limit clears quickly and
+	// the account returns to the pool.
+	defaultCooldown = 60 * time.Second
+
+	// usageExhaustedCooldown benches an account that reports "out of extra usage" (its pay-as-you-go
+	// budget is spent). Self-healing: the account is retried after the window, in case its limit has
+	// reset since.
+	usageExhaustedCooldown = 10 * time.Minute
+
+	// deadTokenCooldown benches an account whose credential can't be refreshed (a dead session key
+	// needing an operator re-seed); cooling it longer avoids hammering the OAuth bootstrap each Send.
+	deadTokenCooldown = 15 * time.Minute
+)
 
 // AllCoolingError reports that every account in the pool is on cooldown, so no request can be
 // served right now. RetryAfter is the delay until the soonest account becomes available; the
@@ -63,15 +75,11 @@ func cooling(account domain.Account, now time.Time) bool {
 	return !account.CooldownUntil.IsZero() && account.CooldownUntil.After(now)
 }
 
-// cool puts an account on cooldown after a 429: it honors the upstream reset time when present,
-// otherwise applies the short default. A persistence failure is logged but not fatal — the next
-// Send simply re-reads the (still un-cooled) account and tries it again.
-func (p *Provider) cool(ctx context.Context, account string, rate *RateLimitError, now time.Time) {
-	until := rate.ResetAt
-	if until.IsZero() {
-		until = now.Add(defaultCooldown)
-	}
-
+// cool puts an account on cooldown until the given time and persists it so the next Send's
+// selectOrder skips the account. The caller (via cooldownFor) picks the duration per failure type.
+// A persistence failure is logged but not fatal — the next Send simply re-reads the (still
+// un-cooled) account and tries it again.
+func (p *Provider) cool(ctx context.Context, account string, until time.Time) {
 	if err := p.store.SetCooldown(ctx, account, until); err != nil {
 		log.Printf("llmgw: set cooldown for %q: %v", account, err)
 	}

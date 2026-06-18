@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -44,6 +45,16 @@ type UpstreamError struct {
 // Error implements the error interface.
 func (e *UpstreamError) Error() string {
 	return fmt.Sprintf("upstream returned status %d: %s", e.Status, e.Body)
+}
+
+// UsageExhaustedError reports that an account's extra-usage (pay-as-you-go) budget is spent —
+// Anthropic's "out of extra usage" 400. It is account-specific: another account may still serve,
+// so Send cools this account and fails over rather than surfacing the error to the caller.
+type UsageExhaustedError struct{}
+
+// Error implements the error interface.
+func (e *UsageExhaustedError) Error() string {
+	return "account out of extra usage"
 }
 
 // Provider forwards Anthropic Messages requests to Claude Max over OAuth, applying the Claude
@@ -89,15 +100,58 @@ func (p *Provider) Send(ctx context.Context, req llm.ChatRequest, out domain.Str
 	for _, account := range p.selectOrder(accounts, now) {
 		metered, err := p.sendVia(ctx, account, req, out)
 
-		var rate *RateLimitError
-		if errors.As(err, &rate) {
-			p.cool(ctx, account, rate, now)
+		if until, retry := cooldownFor(err, now); retry {
+			p.cool(ctx, account, until)
 			continue
 		}
 		return metered, err
 	}
 
 	return usage.Usage{}, p.allCooling(ctx, now)
+}
+
+// cooldownFor decides whether an error from one account's Send attempt should fail over to the
+// next account, and until when the failing account is cooled. Account-specific or transient
+// failures retry — a rate limit (429), extra-usage exhaustion, a dead credential, or an upstream
+// 5xx/401/403 — each cooled so selectOrder skips the account meanwhile. Request-level errors (a
+// malformed 4xx, a parse failure) return false: they would fail on every account, so they surface
+// to the caller unchanged.
+func cooldownFor(err error, now time.Time) (time.Time, bool) {
+	if err == nil {
+		return time.Time{}, false
+	}
+
+	var rate *RateLimitError
+	if errors.As(err, &rate) {
+		if !rate.ResetAt.IsZero() {
+			return rate.ResetAt, true
+		}
+		return now.Add(defaultCooldown), true
+	}
+
+	var exhausted *UsageExhaustedError
+	if errors.As(err, &exhausted) {
+		return now.Add(usageExhaustedCooldown), true
+	}
+
+	var dead *DeadRefreshTokenError
+	if errors.As(err, &dead) {
+		return now.Add(deadTokenCooldown), true
+	}
+
+	var upstream *UpstreamError
+	if errors.As(err, &upstream) && shouldFailoverStatus(upstream.Status) {
+		return now.Add(defaultCooldown), true
+	}
+
+	return time.Time{}, false
+}
+
+// shouldFailoverStatus reports whether an upstream HTTP status is account-specific or transient
+// enough to try the next account: auth rejections (401/403) and server errors (5xx). Other 4xx
+// are request-level and surface unchanged.
+func shouldFailoverStatus(status int) bool {
+	return status == http.StatusUnauthorized || status == http.StatusForbidden || status >= 500
 }
 
 // sendVia forwards the request through one account: it obtains a valid access token, applies the
@@ -148,15 +202,40 @@ func (p *Provider) handleResponse(resp *http.Response, out domain.StreamSink) (u
 	if err != nil {
 		return usage.Usage{}, fmt.Errorf("read response body:\n%w", err)
 	}
-
-	switch resp.StatusCode {
-	case http.StatusOK:
+	if resp.StatusCode == http.StatusOK {
 		return writeAndMeter(body, out)
-	case http.StatusTooManyRequests:
-		return usage.Usage{}, &RateLimitError{ResetAt: parseResetAt(resp.Header, time.Now())}
-	default:
-		return usage.Usage{}, &UpstreamError{Status: resp.StatusCode, Body: string(body)}
 	}
+	return usage.Usage{}, classifyUpstream(resp.StatusCode, resp.Header, body)
+}
+
+// classifyUpstream maps a non-200 upstream response to a typed error so the buffered and streaming
+// paths share one decision: a 429 becomes a RateLimitError (carrying the reset time when present),
+// a 4xx whose body is Anthropic's "out of extra usage" billing rejection becomes a
+// UsageExhaustedError (account-specific — Send cools and fails over), and anything else an
+// UpstreamError (surfaced to the caller).
+func classifyUpstream(status int, header http.Header, body []byte) error {
+	if status == http.StatusTooManyRequests {
+		return &RateLimitError{ResetAt: parseResetAt(header, time.Now())}
+	}
+	if status >= 400 && status < 500 && isUsageExhausted(body) {
+		return &UsageExhaustedError{}
+	}
+	return &UpstreamError{Status: status, Body: string(body)}
+}
+
+// isUsageExhausted reports whether an upstream error body is the "out of extra usage" exhaustion
+// of an account's pay-as-you-go budget (distinct from a malformed-request 4xx). It matches the
+// stable phrase in the error message rather than the full text.
+func isUsageExhausted(body []byte) bool {
+	var parsed struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(parsed.Error.Message), "out of extra usage")
 }
 
 // messageResponse is the slice of a successful Messages response the gateway meters.
