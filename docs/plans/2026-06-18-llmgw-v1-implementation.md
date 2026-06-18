@@ -98,11 +98,18 @@ type Store interface {
     SaveToken(ctx context.Context, account string, t Token) error
 }
 
+// StreamSink keeps the domain free of net/http: the provider writes/flushes into it; the HTTP
+// handler adapts its ResponseWriter and owns status + headers.
+type StreamSink interface {
+    io.Writer
+    Flush()
+}
+
 type Provider interface {
     // Send forwards req upstream. For non-streaming it writes the JSON body to out and returns
     // Usage; for streaming it relays SSE to out while accumulating Usage. A provider rate-limit
     // surfaces as *RateLimitError (carries reset time when present).
-    Send(ctx context.Context, req llm.ChatRequest, out http.ResponseWriter) (usage.Usage, error)
+    Send(ctx context.Context, req llm.ChatRequest, out StreamSink) (usage.Usage, error)
 }
 ```
 
@@ -343,6 +350,13 @@ extend `README.md` with run + token re-seed runbook.
   budgets/routes/prices by editing rows (example SQL), and the **dead-refresh-token re-seed**
   procedure. Final check: `go build ./... && go vet ./... && go test ./...` (real-API suites run
   where creds present), and a documented manual smoke against the deployed container.
+
+- [ ] **Task 9.3 — Retention + server hardening.** (a) A periodic prune (background goroutine on a
+  ticker, e.g. hourly) deletes `usage_event` rows older than 35 days and expired `reservation`
+  rows — satisfies spec §6 retention so the hot-path aggregate stays bounded. (b) Set
+  `http.Server.ReadHeaderTimeout` (and an idle timeout; **no `WriteTimeout`** — streaming needs
+  unbounded writes). (c) Trap SIGINT/SIGTERM → `server.Shutdown(ctx)` for graceful drain. Unit
+  test the prune (insert old + recent rows → only old removed).
 
 **Verify:** image builds; compose renders; full `go test ./...` green (gated suites SKIP without
 creds). **Commit + push.**

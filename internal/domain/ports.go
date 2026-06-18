@@ -2,7 +2,7 @@ package domain
 
 import (
 	"context"
-	"net/http"
+	"io"
 	"time"
 
 	"github.com/clemsix6/LLMGW/internal/domain/llm"
@@ -73,11 +73,22 @@ type Token struct {
 	ExpiresAt time.Time // ExpiresAt is when AccessToken stops being valid.
 }
 
+// StreamSink is the write target a Provider relays the upstream response into. The domain
+// stays free of net/http: buffered (non-streaming) responses are written then flushed once,
+// SSE responses flush after each event to preserve latency. The HTTP handler adapts its
+// ResponseWriter to this interface and keeps HTTP status/header ownership to itself.
+type StreamSink interface {
+	io.Writer
+
+	// Flush pushes buffered bytes to the consumer.
+	Flush()
+}
+
 // Provider forwards a request to an upstream LLM backend.
 type Provider interface {
 	// Send forwards req upstream. For non-streaming it writes the JSON body to out and
 	// returns the Usage; for streaming it relays SSE to out while accumulating Usage.
-	Send(ctx context.Context, req llm.ChatRequest, out http.ResponseWriter) (usage.Usage, error)
+	Send(ctx context.Context, req llm.ChatRequest, out StreamSink) (usage.Usage, error)
 }
 
 // Store is the persistence port: configuration, usage counters, reservations, and tokens.
