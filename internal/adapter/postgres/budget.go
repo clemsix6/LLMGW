@@ -78,8 +78,9 @@ func (s *Store) ReleaseReservation(ctx context.Context, reservationID int64) err
 // collectively overshooting a calls limit. The domain.WholeProjectTag sentinel aggregates across
 // every tag of the project, mirroring WindowedTotals.
 //
-// Expired reservations are pruned first, so a request that crashed between Reserve and
-// ReleaseReservation cannot inflate the count beyond its TTL.
+// This method is test-only: production admits through ReserveIfAdmitted, which prunes the
+// project's expired reservations under the lock before counting. It is retained for the adapter
+// unit tests, so it prunes expired rows first to mirror that production behaviour.
 func (s *Store) InflightTotals(ctx context.Context, projectID int64, tag string) (domain.Totals, error) {
 	if err := s.pruneExpiredReservations(ctx); err != nil {
 		return domain.Totals{}, err
@@ -88,25 +89,33 @@ func (s *Store) InflightTotals(ctx context.Context, projectID int64, tag string)
 }
 
 // ReserveIfAdmitted is the concurrency-safe pre-check + reservation. Within one transaction it
-// takes a per-(project, tag) advisory lock, gathers the requested window totals, lets admit rule
-// on them, and — only when admit returns true — inserts a reservation, all before the lock
-// releases at commit.
+// takes a per-project advisory lock, prunes the project's expired reservations, gathers the
+// requested window totals, lets admit rule on them, and — only when admit returns true — inserts
+// a reservation, all before the lock releases at commit.
 //
-// The advisory lock serialises admissions for the SAME (project, tag): a second request for that
-// key blocks on the lock until the first commits, by which point the first's reservation row is
-// visible to the second's count. Two concurrent near-limit requests therefore cannot both be
-// admitted (no calls-cap overshoot). Different keys hash to different locks and never contend.
+// The advisory lock serialises admissions for the SAME project (across every tag): a second
+// request for the project blocks on the lock until the first commits, by which point the first's
+// reservation row is visible to the second's count. Two concurrent near-limit requests therefore
+// cannot both be admitted — including two requests on DIFFERENT tags racing a whole-project
+// (tag IS NULL) calls cap, which a per-(project, tag) lock would let overshoot. Different projects
+// hash to different locks and never contend.
 //
-// On a blocking decision the transaction rolls back (it performed no writes — the totals are
-// read-only and the lock is transaction-scoped), so a blocked request leaves no trace.
+// On a blocking decision the transaction rolls back, including the expired-reservation prune —
+// harmless housekeeping (a later admission re-prunes, and the in-flight count already excludes
+// expired rows via its expires_at filter). The lock is transaction-scoped, so a blocked request
+// leaves no lasting trace.
 func (s *Store) ReserveIfAdmitted(ctx context.Context, projectID int64, tag string, ttl time.Duration, reads []domain.WindowRead, admit func(totals []domain.WindowTotals) bool) (int64, bool, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return 0, false, fmt.Errorf("begin admission for project %d tag %q:\n%w", projectID, tag, err)
 	}
-	defer tx.Rollback(ctx) // no-op once committed; rolls back a blocked (write-free) admission.
+	defer tx.Rollback(ctx) // no-op once committed; rolls back a blocked admission.
 
-	if err := lockAdmission(ctx, tx, projectID, tag); err != nil {
+	if err := lockAdmission(ctx, tx, projectID); err != nil {
+		return 0, false, err
+	}
+
+	if err := pruneProjectReservations(ctx, tx, projectID); err != nil {
 		return 0, false, err
 	}
 
@@ -129,15 +138,18 @@ func (s *Store) ReserveIfAdmitted(ctx context.Context, projectID int64, tag stri
 	return id, true, nil
 }
 
-// lockAdmission takes the transaction-scoped advisory lock that serialises admissions for a
-// (project, tag). The lock auto-releases when the transaction ends. hashtext folds the composite
-// key into the lock space; a rare hash collision only makes two unrelated keys serialise, never a
-// correctness problem.
-func lockAdmission(ctx context.Context, q rowQuerier, projectID int64, tag string) error {
-	key := fmt.Sprintf("%d:%s", projectID, tag)
-
-	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, key); err != nil {
-		return fmt.Errorf("acquire admission lock for project %d tag %q:\n%w", projectID, tag, err)
+// lockAdmission takes the transaction-scoped advisory lock that serialises admissions for a whole
+// project. The project id is a bigint, so it is used directly as the advisory-lock key (no
+// hashing, no collisions). The lock auto-releases when the transaction ends.
+//
+// Keying on the project (not the (project, tag) pair) is what closes the whole-project
+// (tag IS NULL) calls-cap overshoot: concurrent requests on different tags can no longer both pass
+// a project-wide cap, because the second blocks until the first's reservation is committed and
+// visible. The critical section is cheap — a few indexed SELECTs plus one INSERT, no upstream
+// call — so per-project serialisation costs little; the slow LLM call happens outside the lock.
+func lockAdmission(ctx context.Context, q rowQuerier, projectID int64) error {
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, projectID); err != nil {
+		return fmt.Errorf("acquire admission lock for project %d:\n%w", projectID, err)
 	}
 	return nil
 }
@@ -163,8 +175,9 @@ func gatherWindowTotals(ctx context.Context, q rowQuerier, projectID int64, read
 }
 
 // inflightCalls counts the non-expired reservations for a (project, tag) into Totals.Calls. It
-// filters on expires_at without deleting, so it is safe to run inside the read-only admission
-// transaction (pruning of expired rows is housekeeping owned by InflightTotals).
+// filters on expires_at without deleting, so the count never includes leaked (expired) rows
+// regardless of pruning. In production ReserveIfAdmitted prunes the project's expired rows under
+// the admission lock just before this count; deletion is decoupled from counting on purpose.
 func inflightCalls(ctx context.Context, q rowQuerier, projectID int64, tag string) (domain.Totals, error) {
 	query := `SELECT COUNT(*)::bigint FROM reservation WHERE project_id = $1 AND expires_at >= now()`
 	args := []any{projectID}
@@ -195,13 +208,27 @@ RETURNING id`
 	return id, nil
 }
 
-// pruneExpiredReservations deletes every reservation whose TTL has elapsed. It runs before each
-// InflightTotals read so the concurrency guard never counts leaked (expired) reservations.
+// pruneExpiredReservations deletes every reservation whose TTL has elapsed, across all projects.
+// It is test-only: it runs before each test-only InflightTotals read so that path mirrors prod.
+// Production prunes per-project inside ReserveIfAdmitted (under the admission lock), not here.
 func (s *Store) pruneExpiredReservations(ctx context.Context) error {
 	const query = `DELETE FROM reservation WHERE expires_at < now()`
 
 	if _, err := s.pool.Exec(ctx, query); err != nil {
 		return fmt.Errorf("prune expired reservations:\n%w", err)
+	}
+	return nil
+}
+
+// pruneProjectReservations deletes the project's expired reservations. ReserveIfAdmitted calls it
+// inside the admission transaction, under the per-project lock, so leaked rows from a request that
+// crashed between reserve and release self-heal on the next admission instead of accumulating —
+// no separate sweeper needed. The expires_at index keeps the delete cheap as rows pile up.
+func pruneProjectReservations(ctx context.Context, q rowQuerier, projectID int64) error {
+	const query = `DELETE FROM reservation WHERE project_id = $1 AND expires_at < now()`
+
+	if _, err := q.Exec(ctx, query, projectID); err != nil {
+		return fmt.Errorf("prune expired reservations for project %d:\n%w", projectID, err)
 	}
 	return nil
 }

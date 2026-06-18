@@ -135,24 +135,17 @@ type Store interface {
 	// RecordUsage persists a completed call as a usage_event row.
 	RecordUsage(ctx context.Context, e UsageEvent) error
 
-	// WindowedTotals sums usage for a (project, tag) over events since the given time.
-	WindowedTotals(ctx context.Context, projectID int64, tag string, since time.Time) (Totals, error)
-
-	// Reserve records an in-flight call for a (project, tag), returning the reservation id.
-	Reserve(ctx context.Context, projectID int64, tag string, ttl time.Duration) (reservationID int64, err error)
-
 	// ReserveIfAdmitted atomically admits and reserves a call for a (project, tag). It serialises
-	// concurrent admissions for the same (project, tag), gathers the requested window totals, and
-	// passes them (in the same order as reads) to admit. Only when admit returns true is a
-	// reservation inserted, so two concurrent near-limit requests cannot both be admitted. It
-	// returns the reservation id and true when reserved, or (0, false) when admit declined.
+	// concurrent admissions for the whole project (across every tag), prunes the project's expired
+	// reservations, gathers the requested window totals, and passes them (in the same order as
+	// reads) to admit. Only when admit returns true is a reservation inserted, so two concurrent
+	// near-limit requests cannot both be admitted — including two on different tags racing a
+	// whole-project cap. It returns the reservation id and true when reserved, or (0, false) when
+	// admit declined.
 	ReserveIfAdmitted(ctx context.Context, projectID int64, tag string, ttl time.Duration, reads []WindowRead, admit func(totals []WindowTotals) bool) (reservationID int64, admitted bool, err error)
 
 	// ReleaseReservation removes a previously created reservation.
 	ReleaseReservation(ctx context.Context, reservationID int64) error
-
-	// InflightTotals aggregates the non-expired reservations for a (project, tag).
-	InflightTotals(ctx context.Context, projectID int64, tag string) (Totals, error)
 
 	// LoadToken returns the persisted OAuth token for an account label.
 	LoadToken(ctx context.Context, account string) (Token, error)

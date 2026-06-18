@@ -2,10 +2,14 @@ package postgres
 
 import (
 	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/clemsix6/LLMGW/internal/domain"
+	"github.com/clemsix6/LLMGW/internal/domain/budget"
 )
 
 // TestLimitsFor proves LimitsFor returns the concrete-tag rows plus the whole-project rows
@@ -119,6 +123,64 @@ func TestInflightWholeProject(t *testing.T) {
 
 	assertInflightCalls(t, ctx, store, projectID, "news", 1)
 	assertInflightCalls(t, ctx, store, projectID, domain.WholeProjectTag, 2)
+}
+
+// TestReserveIfAdmittedConcurrency proves the project-level admission lock closes the whole-project
+// (cross-tag) calls-cap overshoot. It fires M concurrent requests, each on a DISTINCT tag, all
+// subject to a single whole-project (tag IS NULL) calls cap of N, and asserts EXACTLY N are
+// admitted. With the old per-(project, tag) lock, the distinct tags would hash to distinct locks,
+// race a shared count of zero in-flight, and all M could pass — the gap this test guards against.
+// The admit predicate is the real budget.Evaluate the handler runs, so it exercises the production
+// decision path (without HTTP or the upstream call), keeping the lock covered in CI with no real
+// Anthropic traffic.
+func TestReserveIfAdmittedConcurrency(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	projectID, err := store.EnsureProject(ctx, "concurrency")
+	if err != nil {
+		t.Fatalf("EnsureProject: %v", err)
+	}
+
+	const (
+		capN  = 5  // capN is the whole-project calls cap (admit at most this many).
+		fireM = 20 // fireM is the number of concurrent requests, each on its own tag (fireM > capN).
+	)
+
+	// A single whole-project (nil tag) calls cap; the per-request tag never matters to it. reads
+	// aggregates the project-wide in-flight count, mirroring how groupLimits scopes a nil-tag limit.
+	limits := []domain.BudgetLimit{{Dimension: "calls", Window: "hour", MaxValue: capN, Action: "block"}}
+	reads := []domain.WindowRead{{Tag: domain.WholeProjectTag, Since: time.Now().UTC().Add(-time.Hour)}}
+
+	admit := func(totals []domain.WindowTotals) bool {
+		return !budget.Evaluate(limits, totals[0].Current, totals[0].Inflight, 0).Blocked
+	}
+
+	var admitted atomic.Int64
+	var wg sync.WaitGroup
+
+	for i := 0; i < fireM; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+
+			tag := fmt.Sprintf("tag-%d", i) // distinct tag per goroutine exercises the cross-tag gap
+			_, ok, err := store.ReserveIfAdmitted(ctx, projectID, tag, 2*time.Minute, reads, admit)
+			if err != nil {
+				t.Errorf("ReserveIfAdmitted(tag=%s): %v", tag, err)
+				return
+			}
+			if ok {
+				admitted.Add(1)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	if got := admitted.Load(); got != capN {
+		t.Fatalf("admitted %d of %d concurrent requests across distinct tags, want exactly %d "+
+			"(project-level lock must close the cross-tag whole-project overshoot)", got, fireM, capN)
+	}
 }
 
 // insertLimit writes one budget_limit row; a nil tag stores a whole-project (NULL) limit.
