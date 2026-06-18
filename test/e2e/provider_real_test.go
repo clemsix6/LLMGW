@@ -93,7 +93,7 @@ func newRealProvider(t *testing.T, ctx context.Context, token domain.Token) *cla
 		t.Fatalf("seed token: %v", err)
 	}
 
-	return claudemax.New(store, testAccount, testClaudeCodeVersion)
+	return claudemax.New(store, testClaudeCodeVersion)
 }
 
 // tinyRequest builds a minimal non-streaming Messages request.

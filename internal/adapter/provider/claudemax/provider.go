@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/clemsix6/LLMGW/internal/domain"
@@ -44,37 +46,65 @@ func (e *UpstreamError) Error() string {
 	return fmt.Sprintf("upstream returned status %d: %s", e.Status, e.Body)
 }
 
-// Provider forwards Anthropic Messages requests to Claude Max over OAuth, applying the
-// Claude Code spoof. V1 serves a single account.
+// Provider forwards Anthropic Messages requests to Claude Max over OAuth, applying the Claude
+// Code spoof. It holds a pool of accounts (the oauth_token rows) and rotates across them
+// round-robin, putting an account on cooldown when the upstream rate-limits it.
 type Provider struct {
-	tokens *tokenManager // tokens hands out valid OAuth access tokens for the account.
+	tokens *tokenManager // tokens hands out valid OAuth access tokens per account.
 
 	spoof spoof // spoof builds the Claude Code billing header and request headers.
 
-	account string // account is the label of the OAuth account this provider serves.
+	store accountStore // store lists the pool's accounts and persists their cooldown state.
 
 	httpClient *http.Client // httpClient performs the upstream request (a plain net/http client).
 
 	baseURL string // baseURL is the Anthropic API base; injectable for tests.
+
+	next atomic.Uint64 // next is the round-robin cursor, advanced once per Send.
 }
 
-// New builds a Claude Max provider for the given account, spoofing claudeCodeVersion.
-func New(store tokenStore, account, claudeCodeVersion string) *Provider {
+// New builds a Claude Max provider over the accounts persisted in store, spoofing claudeCodeVersion.
+func New(store accountStore, claudeCodeVersion string) *Provider {
 	return &Provider{
 		tokens:     newTokenManager(store),
 		spoof:      spoof{version: claudeCodeVersion},
-		account:    account,
+		store:      store,
 		httpClient: &http.Client{},
 		baseURL:    defaultAnthropicBaseURL,
 	}
 }
 
-// Send forwards a request upstream and returns the metered usage. For a non-streaming request
-// it writes the full response body to out; for a streaming request it relays the upstream SSE
-// to out unbuffered while accumulating usage. An upstream non-200 surfaces as a typed error
-// (RateLimitError / UpstreamError) before any byte is written to out.
+// Send forwards a request through the next non-cooling account, rotating round-robin. On an
+// upstream 429 it cools that account (honoring the reset header, else a short default) and retries
+// the next account. When every account is cooling it returns *AllCoolingError so the handler can
+// reply 503. A success or any non-rate-limit error is returned immediately — once bytes reach out
+// the relay cannot be retried. Both the non-streaming and streaming paths flow through here.
 func (p *Provider) Send(ctx context.Context, req llm.ChatRequest, out domain.StreamSink) (usage.Usage, error) {
-	token, err := p.tokens.Valid(ctx, p.account)
+	accounts, err := p.store.LoadAccounts(ctx)
+	if err != nil {
+		return usage.Usage{}, fmt.Errorf("load accounts:\n%w", err)
+	}
+
+	now := time.Now()
+	for _, account := range p.selectOrder(accounts, now) {
+		metered, err := p.sendVia(ctx, account, req, out)
+
+		var rate *RateLimitError
+		if errors.As(err, &rate) {
+			p.cool(ctx, account, rate, now)
+			continue
+		}
+		return metered, err
+	}
+
+	return usage.Usage{}, p.allCooling(ctx, now)
+}
+
+// sendVia forwards the request through one account: it obtains a valid access token, applies the
+// Claude Code spoof, and relays the upstream response (buffered for non-streaming, SSE for
+// streaming). An upstream non-200 surfaces as a typed error before any byte is written to out.
+func (p *Provider) sendVia(ctx context.Context, account string, req llm.ChatRequest, out domain.StreamSink) (usage.Usage, error) {
+	token, err := p.tokens.Valid(ctx, account)
 	if err != nil {
 		return usage.Usage{}, fmt.Errorf("obtain access token:\n%w", err)
 	}

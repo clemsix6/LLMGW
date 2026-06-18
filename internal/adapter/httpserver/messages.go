@@ -212,10 +212,17 @@ func writeSuccess(w http.ResponseWriter, body []byte) {
 	_, _ = w.Write(body)
 }
 
-// writeProviderError maps a provider error to a clean HTTP status: a rate limit becomes 503
-// (with Retry-After when a reset is known), a dead refresh token 502, an upstream non-2xx its
-// own status, and anything else 500.
+// writeProviderError maps a provider error to a clean HTTP status: all accounts cooling becomes
+// 503 with a Retry-After, a rate limit 503 (with Retry-After when a reset is known), a dead
+// refresh token 502, an upstream non-2xx its own status, and anything else 500.
 func writeProviderError(w http.ResponseWriter, err error) {
+	var cooling *claudemax.AllCoolingError
+	if errors.As(err, &cooling) {
+		w.Header().Set("Retry-After", retryAfterDuration(cooling.RetryAfter))
+		writeError(w, http.StatusServiceUnavailable, "all_cooling", cooling.Error())
+		return
+	}
+
 	var rate *claudemax.RateLimitError
 	if errors.As(err, &rate) {
 		if !rate.ResetAt.IsZero() {
@@ -250,7 +257,12 @@ func upstreamStatus(status int) int {
 
 // retryAfterSeconds renders a Retry-After delay (whole seconds, at least one) until resetAt.
 func retryAfterSeconds(resetAt time.Time) string {
-	seconds := int(time.Until(resetAt).Seconds())
+	return retryAfterDuration(time.Until(resetAt))
+}
+
+// retryAfterDuration renders a Retry-After delay (whole seconds, at least one) for a duration.
+func retryAfterDuration(d time.Duration) string {
+	seconds := int(d.Seconds())
 	if seconds < 1 {
 		seconds = 1
 	}

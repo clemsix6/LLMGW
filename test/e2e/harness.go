@@ -99,7 +99,7 @@ func (h *Harness) SeedClaudeMax(ctx context.Context, account string, token domai
 	if err := h.store.SaveToken(ctx, account, token); err != nil {
 		return fmt.Errorf("seed token:\n%w", err)
 	}
-	h.store.SetDefaultProvider(claudemax.New(h.store, account, version))
+	h.store.SetDefaultProvider(claudemax.New(h.store, version))
 	return nil
 }
 

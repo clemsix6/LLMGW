@@ -100,6 +100,14 @@ type Token struct {
 	ExpiresAt time.Time // ExpiresAt is when AccessToken stops being valid.
 }
 
+// Account is a provider account and its cooldown state. The Claude Max provider pool uses it to
+// pick a non-cooling account round-robin and to compute the soonest retry when all are cooling.
+type Account struct {
+	Label string // Label identifies the account (the oauth_token account_label).
+
+	CooldownUntil time.Time // CooldownUntil is when the account stops being rate-limited; zero when not cooling.
+}
+
 // StreamSink is the write target a Provider relays the upstream response into. The domain
 // stays free of net/http: buffered (non-streaming) responses are written then flushed once,
 // SSE responses flush after each event to preserve latency. The HTTP handler adapts its
@@ -152,4 +160,12 @@ type Store interface {
 
 	// SaveToken persists the OAuth token for an account label.
 	SaveToken(ctx context.Context, account string, t Token) error
+
+	// LoadAccounts returns every account under the provider with its cooldown state, ordered by
+	// label, so the provider pool can select a non-cooling account round-robin.
+	LoadAccounts(ctx context.Context) ([]Account, error)
+
+	// SetCooldown records that an account is rate-limited until the given time, so the provider
+	// pool skips it until then.
+	SetCooldown(ctx context.Context, account string, until time.Time) error
 }
