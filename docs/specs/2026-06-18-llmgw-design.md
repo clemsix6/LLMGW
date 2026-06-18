@@ -243,49 +243,59 @@ out-of-band for Anthropic; the API-key / OpenRouter providers are the durable ex
   with an optional OpenAI-compatible surface + format translation when an OpenAI-native
   consumer must reach an Anthropic backend.
 
-## 11. Testing (E2E-first)
+## 11. Testing (E2E-first, against the real provider)
 
-**Principle: every feature is covered by end-to-end tests** that drive the real gateway over
-its HTTP API and assert on both the response and the persisted state.
+**Principle: every feature is covered by end-to-end tests that drive the real gateway AND hit
+the real Anthropic API.** A mock upstream would not exercise the OAuth + Claude Code spoof —
+the very core that broke with clewdr and the project's main risk. We accept non-determinism:
+tests assert on response *shape and plausibility*, not exact content, and retry transient API
+errors.
 
 Harness:
 
-- **Real gateway** — the actual server, booted in-process on a random local port.
-- **Real Postgres** — an ephemeral DB (testcontainers-go, or a provided test DSN) with
-  migrations applied, so the budget-aggregation SQL is exercised for real, not mocked.
-- **Fake upstream provider** — an in-test HTTP server mimicking Anthropic's `/v1/messages`
-  (+ `/v1/oauth/token`). Programmable per test: canned responses with controllable `usage`,
-  SSE streaming, injectable `429`/errors, and it **records the requests it received** (to assert
-  the gateway sent the Claude Code headers + billing-header system block). Keeps E2E
-  deterministic, fast, quota-free, and able to simulate failures.
-- **Gated live smoke** (`LLMGW_LIVE_SMOKE=1`, off in CI) — a couple of real calls against the
-  actual Claude Max backend to confirm the spoof/OAuth still work against Anthropic.
+- **Real gateway** — booted in-process on a random local port.
+- **Real Postgres** — ephemeral DB (testcontainers-go or a test DSN), migrations applied, so
+  budget-aggregation SQL is exercised for real.
+- **Real Anthropic backend** — the gateway routes to actual Claude Max via OAuth. Requires
+  dedicated test credentials (a seeded real `refresh_token`); calls consume real usage and
+  rotate the token (persisted). This is the point: a green suite proves the spoof/OAuth still
+  work against Anthropic today.
+- **Resilience** — the test client retries transient API errors (5xx, network, timeouts) with
+  bounded backoff; it never retries the gateway's own `402`/`503` (those are assertions). The
+  retry budget keeps real-API flakiness from failing the suite spuriously.
+- **Local stub upstream — failure injection only** — behaviours the real API will not produce on
+  demand (a forced provider `429` → cooldown, all-accounts-cooling → `503`, a refresh failure)
+  point the gateway at a local stub for those specific tests. This is the only non-real-provider
+  part, scoped to failure paths.
 
-Coverage matrix (each item = an E2E test asserting response **and** DB state):
+Assertions are tolerant: HTTP 200, valid Anthropic response structure, **non-empty content of a
+plausible length** (≥ a chars/tokens threshold), expected `stop_reason`, and a `tool_use` block
+when tools are exercised — never exact text.
 
-- Non-streaming happy path: 200, body returned, `usage_event` recorded with correct tokens +
-  notional cost, counters updated.
-- Streaming happy path: `stream:true` → SSE relayed to the client, usage accumulated from
+Coverage matrix (each = an E2E test asserting response **and** DB state):
+
+- Non-streaming happy path: 200, plausible-length content, `usage_event` recorded with real
+  tokens > 0 and notional cost > 0, counters updated.
+- Streaming happy path: `stream:true` → real SSE deltas received, usage accumulated from
   `message_start`/`message_delta`, `usage_event` recorded.
 - Project auto-creation: a new `X-Project` creates a `project` row and is tracked.
 - Tag bucketing: usage attributed to the correct `(project, tag)`.
-- Budget limits, per dimension × window — `calls` / `tokens` / `cost_usd` over `hour` / `day`:
-  under limit passes; at/over → 402 with a typed body naming the limit.
-- Concurrency safety: N concurrent requests against a near-limit `calls` cap → exactly the cap
-  pass, the rest 402 (no overshoot).
-- Cost-at-crossing: the crossing call completes; the next is blocked.
-- Unknown model: fail-closed 402 for cost limits; `calls`/`tokens` limits unaffected.
-- Spoof injection: the fake provider asserts it received `User-Agent: claude-code/2.1.76`, the
-  betas, and the prepended billing-header system block.
-- OAuth refresh: expired access token → single-flight refresh against the fake token endpoint →
-  request proceeds; rotated `refresh_token` persisted; two concurrent expired requests trigger
-  exactly one refresh call.
-- Provider `429` → account cooldown honoring the reset header; all accounts cooling → 503 +
-  `Retry-After`.
-- `warn`-action limit: not blocked, but recorded/observable.
+- Budget `calls` limit (deterministic): a low cap + N+1 real calls → the (N+1)th returns 402.
+- Budget `tokens` / `cost_usd` limit: real calls until the running total crosses the limit → the
+  next call returns 402 (the crossing call completes). Repeated over `hour` and `day` windows.
+- Concurrency safety: N concurrent real calls against a near-limit `calls` cap → exactly the cap
+  succeed, the rest 402 (no overshoot).
+- Unknown model: fail-closed 402 for cost limits; `calls` / `tokens` limits unaffected.
+- Spoof validation: a real 200 is itself proof the spoof is accepted (the canary).
+- OAuth refresh: seed a near-expired token → next call triggers a real single-flight refresh
+  against Anthropic → request proceeds; rotated `refresh_token` persisted; concurrent expired
+  requests trigger exactly one refresh.
+- (stub) Provider `429` → account cooldown honoring the reset header; all accounts cooling → 503
+  + `Retry-After`. (stub) `warn`-action limit: not blocked, recorded.
 
-Domain unit tests complement E2E for pure budget arithmetic edge cases (window boundaries,
-mixed dimensions); E2E is the backbone.
+Practicalities: the real-API suite needs test Max credentials + network and consumes quota, so it
+is gated by their presence (runs locally and in CI where the secret is set). Domain unit tests
+cover pure budget arithmetic (window boundaries, mixed dimensions) without network.
 
 ## 12. Open questions
 

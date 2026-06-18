@@ -80,17 +80,23 @@ the code is its own structure documentation.
 
 Keep the domain ignorant of HTTP, SQL, and any provider's wire format.
 
-## Testing (E2E-first, CRUCIAL)
+## Testing (E2E-first against the real provider, CRUCIAL)
 
 - **Every feature MUST be covered by end-to-end tests** that drive the real gateway over its
-  HTTP API and assert on both the response and the persisted DB state.
-- E2E harness: real gateway + real ephemeral Postgres (migrations applied) + a programmable
-  **fake upstream provider** (canned/streamed responses, injectable failures, records the
-  requests it received). Deterministic and quota-free — **no real-provider calls in CI**.
-- A gated live-smoke suite (`LLMGW_LIVE_SMOKE=1`, off by default) hits the real backend to
-  confirm the spoof/OAuth still work.
-- Domain unit tests cover pure-logic edge cases (budget arithmetic, window boundaries); E2E is
-  the backbone, not an afterthought.
+  HTTP API. The E2E suite **hits the real Anthropic API** — a mock would not exercise the
+  OAuth + Claude Code spoof, which is the core risk. Accept non-determinism.
+- Assert on response **shape and plausibility** (status, valid structure, non-empty content of a
+  plausible length, expected `stop_reason`, `tool_use` when tools are used) — never exact text.
+- **Retry transient API errors** (5xx / network / timeouts) with bounded backoff; never retry the
+  gateway's own `402` / `503` (those are assertions).
+- Harness: real gateway + real ephemeral Postgres (migrations applied) + the real Claude Max
+  backend (seeded test credentials; calls consume quota and rotate the token). A **local stub
+  upstream is used ONLY for failure injection** the real API won't produce on demand (forced
+  429 → cooldown, all-cooling → 503, refresh failure).
+- Verify budget tracking from REAL responses (tokens/cost recorded) and limits (a `calls` cap is
+  deterministic; `tokens`/`cost` by crossing).
+- The real-API suite is gated by test-credential presence. Domain unit tests cover pure-logic
+  edge cases (budget arithmetic, window boundaries) without network. E2E is the backbone.
 
 ## Git Workflow
 
