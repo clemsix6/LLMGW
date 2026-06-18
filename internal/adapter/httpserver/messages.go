@@ -41,7 +41,7 @@ type messagesHandler struct {
 	providerName string // providerName labels the serving backend on each usage_event.
 }
 
-// handle validates the request envelope then forwards it. Streaming arrives in a later batch.
+// handle validates the request envelope then forwards it (streaming and non-streaming alike).
 func (h *messagesHandler) handle(w http.ResponseWriter, r *http.Request) {
 	project := r.Header.Get(headerProject)
 	if project == "" {
@@ -52,12 +52,6 @@ func (h *messagesHandler) handle(w http.ResponseWriter, r *http.Request) {
 
 	req, ok := parseBody(w, r)
 	if !ok {
-		return
-	}
-
-	if req.Stream() {
-		writeError(w, http.StatusNotImplemented, "streaming_unsupported",
-			"streaming responses are not yet supported (arrives in a later batch)")
 		return
 	}
 
@@ -81,10 +75,19 @@ func (h *messagesHandler) forward(w http.ResponseWriter, r *http.Request, req ll
 	h.send(w, r, req, projectID, tag, provider)
 }
 
-// send forwards the request to the provider, records the usage_event, and relays the response.
-// Usage is recorded before the success body is written so the row is committed by the time the
-// consumer observes the 200. A provider error is recorded then mapped to an HTTP status.
+// send dispatches to the streaming or buffered relay depending on the request mode.
 func (h *messagesHandler) send(w http.ResponseWriter, r *http.Request, req llm.ChatRequest, projectID int64, tag string, provider domain.Provider) {
+	if req.Stream() {
+		h.sendStreaming(w, r, req, projectID, tag, provider)
+		return
+	}
+	h.sendBuffered(w, r, req, projectID, tag, provider)
+}
+
+// sendBuffered forwards a non-streaming request, records the usage_event, and relays the
+// response. Usage is recorded before the success body is written so the row is committed by the
+// time the consumer observes the 200. A provider error is recorded then mapped to an HTTP status.
+func (h *messagesHandler) sendBuffered(w http.ResponseWriter, r *http.Request, req llm.ChatRequest, projectID int64, tag string, provider domain.Provider) {
 	sink := &bufferedSink{}
 	start := time.Now()
 	metered, err := provider.Send(r.Context(), req, sink)

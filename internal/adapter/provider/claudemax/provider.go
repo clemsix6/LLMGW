@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,10 +14,6 @@ import (
 	"github.com/clemsix6/LLMGW/internal/domain/llm"
 	"github.com/clemsix6/LLMGW/internal/domain/usage"
 )
-
-// errStreamingUnsupported is returned for stream:true requests until the streaming relay
-// is added in a later batch.
-var errStreamingUnsupported = errors.New("streaming not yet supported")
 
 // compile-time assertion that Provider satisfies the domain port.
 var _ domain.Provider = (*Provider)(nil)
@@ -74,14 +69,11 @@ func New(store tokenStore, account, claudeCodeVersion string) *Provider {
 	}
 }
 
-// Send forwards a non-streaming request upstream, writes the response body to out, and
-// returns the metered usage. Streaming requests are rejected until a later batch adds the
-// SSE relay.
+// Send forwards a request upstream and returns the metered usage. For a non-streaming request
+// it writes the full response body to out; for a streaming request it relays the upstream SSE
+// to out unbuffered while accumulating usage. An upstream non-200 surfaces as a typed error
+// (RateLimitError / UpstreamError) before any byte is written to out.
 func (p *Provider) Send(ctx context.Context, req llm.ChatRequest, out domain.StreamSink) (usage.Usage, error) {
-	if req.Stream() {
-		return usage.Usage{}, errStreamingUnsupported
-	}
-
 	token, err := p.tokens.Valid(ctx, p.account)
 	if err != nil {
 		return usage.Usage{}, fmt.Errorf("obtain access token:\n%w", err)
@@ -98,6 +90,9 @@ func (p *Provider) Send(ctx context.Context, req llm.ChatRequest, out domain.Str
 	}
 	defer resp.Body.Close()
 
+	if req.Stream() {
+		return handleStreamResponse(resp, out)
+	}
 	return p.handleResponse(resp, out)
 }
 
