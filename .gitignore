@@ -1,0 +1,15 @@
+# Binaries
+/bin/
+*.exe
+llmgw
+
+# Env / secrets
+.env
+*.local
+
+# Go
+vendor/
+
+# OS / editor
+.DS_Store
+*.swp
