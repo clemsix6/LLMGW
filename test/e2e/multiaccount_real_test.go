@@ -1,14 +1,10 @@
 package e2e
 
 // This suite exercises the REAL multi-account happy path through the full gateway: with >=2 real
-// accounts configured in LLMGW_OAUTH_REFRESH_TOKENS, a wave of requests is served by rotating
-// across the pool. It is GATED on having >=2 configured accounts and SKIPS with a clear message
-// when only one is present (the current single-account configuration), so it never requires a
-// second real token to pass the suite.
-//
-// Note: it refreshes each configured token once (the refresh tokens rotate); with >=2 accounts the
-// TestMain .env write-back (single-account oriented) does not persist every rotation, so a >=2
-// account run should re-seed tokens deliberately. This is out of scope while one account is configured.
+// accounts configured in LLMGW_SESSION_KEYS, a wave of requests is served by rotating across the
+// pool. It is GATED on having >=2 configured accounts and SKIPS with a clear message when only one
+// is present (the current single-account configuration), so it never requires a second real
+// session key to pass the suite.
 //
 //	set -a; . ./.env; set +a; go test ./test/e2e -run MultiAccount -v
 
@@ -23,19 +19,19 @@ import (
 	"github.com/clemsix6/LLMGW/internal/adapter/provider/claudemax"
 )
 
-// accountSeed is one configured account's label and seed refresh token.
+// accountSeed is one configured account's label and seed session key.
 type accountSeed struct {
 	label string // label is the account label (oauth_token account_label).
 
-	token string // token is the seed OAuth refresh token.
+	key string // key is the durable claude.ai session key.
 }
 
-// TestMultiAccountRealHappyPath refreshes each configured account once, seeds them into the pool,
+// TestMultiAccountRealHappyPath bootstraps each configured account once, seeds them into the pool,
 // and fires a wave of real requests, asserting every one is served (rotation across accounts).
 func TestMultiAccountRealHappyPath(t *testing.T) {
 	accounts := configuredAccounts()
 	if len(accounts) < 2 {
-		t.Skipf("multi-account test needs >=2 entries in LLMGW_OAUTH_REFRESH_TOKENS, found %d; skipping", len(accounts))
+		t.Skipf("multi-account test needs >=2 entries in LLMGW_SESSION_KEYS, found %d; skipping", len(accounts))
 	}
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
@@ -49,8 +45,8 @@ func TestMultiAccountRealHappyPath(t *testing.T) {
 	}
 }
 
-// startMultiAccountHarness boots the gateway, refreshes each configured account's token once, and
-// seeds them all into the pool so requests rotate across the accounts.
+// startMultiAccountHarness boots the gateway, bootstraps each configured account from its session
+// key once, and seeds them all into the pool so requests rotate across the accounts.
 func startMultiAccountHarness(t *testing.T, ctx context.Context, accounts []accountSeed) *Harness {
 	t.Helper()
 
@@ -61,9 +57,9 @@ func startMultiAccountHarness(t *testing.T, ctx context.Context, accounts []acco
 	t.Cleanup(func() { harness.Stop(context.Background()) })
 
 	for _, account := range accounts {
-		token, err := claudemax.Refresh(ctx, account.token)
+		token, err := claudemax.Bootstrap(ctx, account.key, testClaudeCodeVersion)
 		if err != nil {
-			t.Fatalf("refresh account %q (re-seed required): %v", account.label, err)
+			t.Fatalf("bootstrap account %q (re-seed required): %v", account.label, err)
 		}
 		if err := harness.SeedClaudeMax(ctx, account.label, token, testClaudeCodeVersion); err != nil {
 			t.Fatalf("seed account %q: %v", account.label, err)
@@ -72,20 +68,20 @@ func startMultiAccountHarness(t *testing.T, ctx context.Context, accounts []acco
 	return harness
 }
 
-// configuredAccounts parses LLMGW_OAUTH_REFRESH_TOKENS into label=token pairs.
+// configuredAccounts parses LLMGW_SESSION_KEYS into label=key pairs.
 func configuredAccounts() []accountSeed {
-	raw := strings.TrimSpace(os.Getenv("LLMGW_OAUTH_REFRESH_TOKENS"))
+	raw := strings.TrimSpace(os.Getenv("LLMGW_SESSION_KEYS"))
 	if raw == "" {
 		return nil
 	}
 
 	var seeds []accountSeed
 	for _, pair := range strings.Split(raw, ",") {
-		label, token, ok := strings.Cut(strings.TrimSpace(pair), "=")
+		label, key, ok := strings.Cut(strings.TrimSpace(pair), "=")
 		if !ok {
 			continue
 		}
-		seeds = append(seeds, accountSeed{label: strings.TrimSpace(label), token: strings.TrimSpace(token)})
+		seeds = append(seeds, accountSeed{label: strings.TrimSpace(label), key: strings.TrimSpace(key)})
 	}
 	return seeds
 }

@@ -77,18 +77,6 @@ func newTokenManager(store tokenStore, claudeCodeVersion string) *tokenManager {
 	}
 }
 
-// Refresh exchanges a refresh token for a fresh token set against the real OAuth endpoint,
-// without any persistence. The E2E coordinator uses it to perform a single up-front refresh per
-// `go test` run: the refresh token rotates on every exchange (single-use), so the suite refreshes
-// once, shares the resulting access token, and writes the rotated refresh token back to .env.
-func Refresh(ctx context.Context, refreshToken string) (domain.Token, error) {
-	manager := &tokenManager{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-		baseURL:    defaultAnthropicBaseURL,
-	}
-	return manager.exchange(ctx, "coordinator", refreshToken)
-}
-
 // Valid returns a non-expired access token for the account, refreshing it if needed.
 func (m *tokenManager) Valid(ctx context.Context, account string) (string, error) {
 	token, err := m.store.LoadToken(ctx, account)

@@ -6,9 +6,9 @@ stable API, with native per-project / per-tag usage tracking and budget limits.
 - Drop-in **Anthropic Messages** API (`POST /v1/messages`) — point any Anthropic SDK at it.
 - Governance via headers: `X-Project`, `X-Tags`. Projects auto-create on first use.
 - Per-`(project, tag)` budgets in **calls / tokens / cost**, hourly + daily, hard-block.
-- **V1 backend:** Claude Max via OAuth (a maintained Go reimplementation of clewdr's
-  `/code` path, without the flagged TLS fingerprint). **Later:** Anthropic API keys,
-  OpenRouter (any LLM).
+- **V1 backend:** Claude Max via OAuth, bootstrapped from a durable claude.ai **session key**
+  (a maintained Go reimplementation of clewdr's `/code` path, without the flagged TLS
+  fingerprint). **Later:** Anthropic API keys, OpenRouter (any LLM).
 - Local only (binds `127.0.0.1`), no auth, Postgres-backed state.
 
 Design: [`docs/specs/2026-06-18-llmgw-design.md`](docs/specs/2026-06-18-llmgw-design.md).
@@ -35,7 +35,7 @@ The schema is created and migrated by the gateway on its next start — no manua
 
 ```sh
 cp .env.example .env
-# edit .env: set LLMGW_POSTGRES_DSN, LLMGW_OAUTH_REFRESH_TOKENS, LLMGW_CLAUDE_CODE_VERSION
+# edit .env: set LLMGW_POSTGRES_DSN, LLMGW_SESSION_KEYS, LLMGW_CLAUDE_CODE_VERSION
 ```
 
 Every variable is documented in [`.env.example`](.env.example).
@@ -127,20 +127,19 @@ A background sweep runs hourly and deletes `usage_event` rows older than 35 days
 counts removed are logged at info. Graceful shutdown (SIGINT/SIGTERM) drains in-flight requests and
 stops the sweep before exit.
 
-### Recovering a dead refresh token
+### Recovering a dead session key
 
-The gateway refreshes Claude Max OAuth tokens automatically. It does **not** perform
-interactive OAuth re-authentication. When a refresh is rejected with `invalid_grant`
-(the stored `refresh_token` is revoked or expired), the refresh fails with a
-`DeadRefreshTokenError` and that account stops serving traffic until an operator
-re-seeds it.
+The gateway bootstraps Claude Code OAuth tokens from the stored claude.ai **session key** and
+refreshes them automatically; when a refresh token dies it re-bootstraps from the session key. It
+does **not** perform interactive re-authentication. Only when the **session key itself** is revoked
+or expired (bootstrap returns 401/403, surfaced as a `DeadRefreshTokenError`) does the account stop
+serving traffic until an operator re-seeds it.
 
 To recover:
 
-1. Obtain a fresh Claude Code OAuth `refresh_token` for the account.
-2. Update the credential the gateway reads on the next refresh:
-   - **Existing DB:** update the matching `oauth_token` row's `refresh_token`
-     (`UPDATE oauth_token SET refresh_token = '<new>' WHERE account_label = '<label>';`).
-   - **Fresh DB:** set `LLMGW_OAUTH_REFRESH_TOKENS` (e.g. `label=<new-token>`); the
-     seed runs on startup.
-3. The gateway resumes on the next request — no restart is required for the DB update.
+1. Obtain a fresh claude.ai session key (`sk-ant-sid…`) for the account.
+2. Update the credential the gateway reads on the next request:
+   - **Existing DB:** set the matching `oauth_token` row's `session_key` and clear the stale derived
+     tokens (`UPDATE oauth_token SET session_key = '<new>', access_token = NULL, refresh_token = NULL WHERE account_label = '<label>';`).
+   - **Fresh DB:** set `LLMGW_SESSION_KEYS` (e.g. `label=<new-key>`); the seed runs on startup.
+3. The gateway re-bootstraps on the next request — no restart is required for the DB update.

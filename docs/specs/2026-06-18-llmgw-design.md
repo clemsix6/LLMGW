@@ -169,8 +169,9 @@ route(id, project_id NULL, model_pattern, provider_id)
 model_price(model, input_usd_per_mtok, output_usd_per_mtok)
 
 -- runtime state (written by the gateway)
-oauth_token(provider_id, account_label, access_token, refresh_token,
-            expires_at, cooldown_until, updated_at)   -- refresh_token ROTATES; persisted
+oauth_token(provider_id, account_label, session_key, access_token, refresh_token,
+            expires_at, cooldown_until, updated_at)   -- session_key = durable seed (owned by the
+                                                      -- seed path); access/refresh are derived & rotated
 usage_event(id, ts, project_id, tag, model, provider,
             input_tokens, output_tokens, cost_usd, status, latency_ms, error)
 reservation(id, project_id, tag, created_at, expires_at)  -- in-flight, counted in pre-check; TTL-cleaned
@@ -190,12 +191,30 @@ during the investigation (not derivable from source).
   `constants.rs:18`); headers `anthropic-version: 2023-06-01`, `anthropic-beta: oauth-2025-04-20`
   (source: `exchange.rs:56-63`).
 - Response includes `access_token`, a **rotated `refresh_token`**, `expires_in` (probe: 28800 = 8h).
-- **Persistence + crash-safety:** persist the rotated `refresh_token` (Postgres `oauth_token`),
-  seeded from env on first run. Refresh must be **single-flight per account** (advisory lock /
-  mutex) so two requests don't replay an already-rotated token (→ `invalid_grant`). Commit the
-  new token **in the same transaction, before first use**, so a crash mid-refresh cannot lose
-  it. LLMGW is refresh-only (no interactive re-auth like clewdr's `exchange.rs:258-296`); a dead
-  `refresh_token` requires a **manual re-seed** (documented runbook).
+- **Persistence + self-heal:** the **durable seed is a claude.ai session key**
+  (`oauth_token.session_key`, seeded from `LLMGW_SESSION_KEYS`), owned by the seed path — `SaveToken`
+  writes only the derived access/refresh tokens and never overwrites it. The gateway **bootstraps** an
+  OAuth token set from the session key on first use (see below), refreshes it **single-flight per
+  account**, and on a refresh `invalid_grant` **re-bootstraps from the session key** (clewdr's
+  self-heal, `exchange.rs` invalid_grant branch). Unlike a refresh token, a session key does not
+  rotate on use, so it is a stable credential; only a revoked/expired session key needs a **manual
+  re-seed** (documented runbook).
+
+**Bootstrap (session key → OAuth) — clewdr's cookie flow (source: `claude_code_state/`):**
+
+- `GET https://api.anthropic.com/api/bootstrap` with `Cookie: sessionKey=<sid>` → pick the
+  `account.memberships[].organization` with a `chat` capability and a paid tier
+  (`pro|max|enterprise|raven`) → `organization_uuid` (source: `organization.rs`).
+- `POST https://api.anthropic.com/v1/oauth/{org_uuid}/authorize` with the cookie + JSON
+  `{client_id, response_type:code, redirect_uri:https://console.anthropic.com/oauth/code/callback,
+  scope:"user:profile user:inference", code_challenge (PKCE S256), code_challenge_method:S256, state,
+  organization_uuid}` → response `{redirect_uri:"…/callback?code=…&state=…"}`; auto-approved because
+  the session is authenticated and the Claude Code `client_id` is pre-trusted (source:
+  `exchange.rs::exchange_code`).
+- `POST .../v1/oauth/token` form-encoded `grant_type=authorization_code` (+ code, code_verifier,
+  client_id, redirect_uri, state) → `{access_token, refresh_token, expires_in}` (source:
+  `exchange.rs::exchange_token`). (probe) validated end-to-end: a session key mints a token that
+  returns 200 on `/v1/messages`.
 
 **Spoof (Claude Code surface):**
 
@@ -261,10 +280,11 @@ Harness:
 - **Real gateway** — booted in-process on a random local port.
 - **Real Postgres** — ephemeral DB (testcontainers-go or a test DSN), migrations applied, so
   budget-aggregation SQL is exercised for real.
-- **Real Anthropic backend** — the gateway routes to actual Claude Max via OAuth. Requires
-  dedicated test credentials (a seeded real `refresh_token`); calls consume real usage and
-  rotate the token (persisted). This is the point: a green suite proves the spoof/OAuth still
-  work against Anthropic today.
+- **Real Anthropic backend** — the gateway routes to actual Claude Max via OAuth. Requires a
+  dedicated test credential (a real claude.ai **session key**, `LLMGW_TEST_SESSION_KEY`); the suite
+  bootstraps an OAuth token set from it once and shares it. The session key does not rotate on use,
+  so the same secret stays valid across runs. This is the point: a green suite proves the bootstrap
+  + spoof + OAuth still work against Anthropic today.
 - **Resilience** — the test client retries transient API errors (5xx, network, timeouts) with
   bounded backoff; it never retries the gateway's own `402`/`503` (those are assertions). The
   retry budget keeps real-API flakiness from failing the suite spuriously.
