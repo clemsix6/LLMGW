@@ -38,6 +38,13 @@ func nullableError(message string) *string {
 // time. A specific tag restricts the aggregate to that bucket; the domain.WholeProjectTag
 // sentinel aggregates across every tag of the project.
 func (s *Store) WindowedTotals(ctx context.Context, projectID int64, tag string, since time.Time) (domain.Totals, error) {
+	return windowedTotals(ctx, s.pool, projectID, tag, since)
+}
+
+// windowedTotals runs the windowed SUM aggregate against q, which is the pool on the public path
+// and the admission transaction on the concurrency-safe path. Sharing the SQL keeps the two
+// readers in lockstep.
+func windowedTotals(ctx context.Context, q rowQuerier, projectID int64, tag string, since time.Time) (domain.Totals, error) {
 	query := `
 SELECT
     COUNT(*)::bigint,
@@ -54,7 +61,7 @@ WHERE project_id = $1 AND ts >= $2`
 	}
 
 	var totals domain.Totals
-	err := s.pool.QueryRow(ctx, query, args...).
+	err := q.QueryRow(ctx, query, args...).
 		Scan(&totals.Calls, &totals.InputTokens, &totals.OutputTokens, &totals.CostUSD)
 	if err != nil {
 		return domain.Totals{}, fmt.Errorf("windowed totals for project %d:\n%w", projectID, err)

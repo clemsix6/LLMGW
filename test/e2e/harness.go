@@ -90,11 +90,13 @@ func startPostgres(ctx context.Context) (*tcpostgres.PostgresContainer, string, 
 	return container, dsn, nil
 }
 
-// SeedClaudeMax persists a seed refresh token for the account and wires the Claude Max provider
-// so the gateway can forward to the real Anthropic API. It must be called before issuing any
-// /v1/messages request (the handler resolves the provider lazily, per request).
-func (h *Harness) SeedClaudeMax(ctx context.Context, account, refreshToken, version string) error {
-	if err := h.store.SaveToken(ctx, account, domain.Token{RefreshToken: refreshToken}); err != nil {
+// SeedClaudeMax persists the account's OAuth token and wires the Claude Max provider so the
+// gateway can forward to the real Anthropic API. It must be called before issuing any
+// /v1/messages request (the handler resolves the provider lazily, per request). The token carries
+// the shared access token (refreshed once per run by the coordinator), so the provider serves it
+// directly without triggering a per-test refresh of the single-use refresh token.
+func (h *Harness) SeedClaudeMax(ctx context.Context, account string, token domain.Token, version string) error {
+	if err := h.store.SaveToken(ctx, account, token); err != nil {
 		return fmt.Errorf("seed token:\n%w", err)
 	}
 	h.store.SetDefaultProvider(claudemax.New(h.store, account, version))

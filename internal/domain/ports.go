@@ -38,6 +38,23 @@ type BudgetLimit struct {
 	Action string // Action is "block" (reject) or "warn" (record only).
 }
 
+// WindowRead identifies one set of usage totals to gather during budget admission: the tag scope
+// to aggregate (a concrete tag, or WholeProjectTag for the project-wide aggregate) and the start
+// of the window (events at or after Since are counted).
+type WindowRead struct {
+	Tag string // Tag is the scope to aggregate; WholeProjectTag aggregates across every tag.
+
+	Since time.Time // Since is the window start; usage recorded at or after it is counted.
+}
+
+// WindowTotals bundles the recorded usage and the in-flight reservations gathered for one
+// WindowRead, so the caller can evaluate a window's limits against a single snapshot.
+type WindowTotals struct {
+	Current Totals // Current is the recorded windowed usage.
+
+	Inflight Totals // Inflight is the in-flight reservation total (Calls only).
+}
+
 // Totals is an aggregate of metered usage over a window or a set of in-flight reservations.
 type Totals struct {
 	Calls int64 // Calls is the number of requests.
@@ -123,6 +140,13 @@ type Store interface {
 
 	// Reserve records an in-flight call for a (project, tag), returning the reservation id.
 	Reserve(ctx context.Context, projectID int64, tag string, ttl time.Duration) (reservationID int64, err error)
+
+	// ReserveIfAdmitted atomically admits and reserves a call for a (project, tag). It serialises
+	// concurrent admissions for the same (project, tag), gathers the requested window totals, and
+	// passes them (in the same order as reads) to admit. Only when admit returns true is a
+	// reservation inserted, so two concurrent near-limit requests cannot both be admitted. It
+	// returns the reservation id and true when reserved, or (0, false) when admit declined.
+	ReserveIfAdmitted(ctx context.Context, projectID int64, tag string, ttl time.Duration, reads []WindowRead, admit func(totals []WindowTotals) bool) (reservationID int64, admitted bool, err error)
 
 	// ReleaseReservation removes a previously created reservation.
 	ReleaseReservation(ctx context.Context, reservationID int64) error

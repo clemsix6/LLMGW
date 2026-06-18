@@ -58,7 +58,9 @@ func (h *messagesHandler) handle(w http.ResponseWriter, r *http.Request) {
 	h.forward(w, r, req, project, tag)
 }
 
-// forward resolves the project and provider, then sends the request upstream.
+// forward resolves the project and provider, enforces the budget, then sends the request
+// upstream. Budget enforcement (atomic pre-check + reservation) happens before forwarding so a
+// blocked request never reaches the provider; a granted reservation is released after the call.
 func (h *messagesHandler) forward(w http.ResponseWriter, r *http.Request, req llm.ChatRequest, project, tag string) {
 	projectID, err := h.store.EnsureProject(r.Context(), project)
 	if err != nil {
@@ -70,6 +72,14 @@ func (h *messagesHandler) forward(w http.ResponseWriter, r *http.Request, req ll
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", "resolve provider")
 		return
+	}
+
+	reservationID, ok := h.admit(w, r, req, project, projectID, tag)
+	if !ok {
+		return
+	}
+	if reservationID != 0 {
+		defer h.release(reservationID)
 	}
 
 	h.send(w, r, req, projectID, tag, provider)

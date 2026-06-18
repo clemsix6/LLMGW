@@ -7,18 +7,15 @@ package e2e
 // usage accumulated from the stream is recorded. Gated on LLMGW_TEST_REFRESH_TOKEN; skips when
 // absent.
 //
-// Re-source .env before each run so the rotated refresh token is picked up:
+// TestMain refreshes the single-use token once and writes the rotation back to .env, so this test
+// triggers no refresh of its own. Re-source .env before each run:
 //
 //	set -a; . ./.env; set +a; go test ./test/e2e -run Streaming -v
-//
-// The .env write-back is registered by startPassthroughHarness via t.Cleanup, so the rotated
-// token is persisted even if a later assertion fails or the retry budget is exhausted.
 
 import (
 	"bufio"
 	"context"
 	"net/http"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -60,14 +57,11 @@ type streamResult struct {
 // asserts a real SSE relay: multiple events ending in message_stop, an unbuffered delivery
 // (first event well before the stream end), and an attributed usage_event with output tokens.
 func TestPassthroughRealStreaming(t *testing.T) {
-	seedToken := os.Getenv("LLMGW_TEST_REFRESH_TOKEN")
-	if seedToken == "" {
-		t.Skip("LLMGW_TEST_REFRESH_TOKEN not set; skipping real-API streaming test")
-	}
+	token := requireSharedToken(t)
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
 	ctx := context.Background()
-	harness := startPassthroughHarness(t, ctx, seedToken)
+	harness := startPassthroughHarness(t, ctx, token)
 
 	result := streamWithRetry(t, ctx, harness)
 	assertStreamPlausible(t, result)

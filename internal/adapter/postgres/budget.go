@@ -5,8 +5,22 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/clemsix6/LLMGW/internal/domain"
 )
+
+// rowQuerier is the subset of pgx operations shared by the connection pool and a transaction, so
+// the same counter and reservation SQL runs either on the pool (public reads) or inside the
+// admission transaction (the concurrency-safe pre-check + reserve).
+type rowQuerier interface {
+	// QueryRow runs a query expected to return at most one row.
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+
+	// Exec runs a statement and returns its command tag.
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
 
 // LimitsFor returns the budget limits that apply to a (project, tag): the rows whose tag matches
 // the concrete request tag, plus the whole-project rows (tag IS NULL) that apply across every
@@ -44,16 +58,7 @@ ORDER BY id`
 // expires after ttl (computed from the database clock to avoid app/DB skew); InflightTotals
 // counts it until then or until ReleaseReservation removes it.
 func (s *Store) Reserve(ctx context.Context, projectID int64, tag string, ttl time.Duration) (int64, error) {
-	const query = `
-INSERT INTO reservation (project_id, tag, expires_at)
-VALUES ($1, $2, now() + make_interval(secs => $3))
-RETURNING id`
-
-	var id int64
-	if err := s.pool.QueryRow(ctx, query, projectID, tag, ttl.Seconds()).Scan(&id); err != nil {
-		return 0, fmt.Errorf("reserve for project %d tag %q:\n%w", projectID, tag, err)
-	}
-	return id, nil
+	return insertReservation(ctx, s.pool, projectID, tag, ttl)
 }
 
 // ReleaseReservation removes a previously created reservation. Releasing an absent id is a no-op.
@@ -79,7 +84,88 @@ func (s *Store) InflightTotals(ctx context.Context, projectID int64, tag string)
 	if err := s.pruneExpiredReservations(ctx); err != nil {
 		return domain.Totals{}, err
 	}
+	return inflightCalls(ctx, s.pool, projectID, tag)
+}
 
+// ReserveIfAdmitted is the concurrency-safe pre-check + reservation. Within one transaction it
+// takes a per-(project, tag) advisory lock, gathers the requested window totals, lets admit rule
+// on them, and — only when admit returns true — inserts a reservation, all before the lock
+// releases at commit.
+//
+// The advisory lock serialises admissions for the SAME (project, tag): a second request for that
+// key blocks on the lock until the first commits, by which point the first's reservation row is
+// visible to the second's count. Two concurrent near-limit requests therefore cannot both be
+// admitted (no calls-cap overshoot). Different keys hash to different locks and never contend.
+//
+// On a blocking decision the transaction rolls back (it performed no writes — the totals are
+// read-only and the lock is transaction-scoped), so a blocked request leaves no trace.
+func (s *Store) ReserveIfAdmitted(ctx context.Context, projectID int64, tag string, ttl time.Duration, reads []domain.WindowRead, admit func(totals []domain.WindowTotals) bool) (int64, bool, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return 0, false, fmt.Errorf("begin admission for project %d tag %q:\n%w", projectID, tag, err)
+	}
+	defer tx.Rollback(ctx) // no-op once committed; rolls back a blocked (write-free) admission.
+
+	if err := lockAdmission(ctx, tx, projectID, tag); err != nil {
+		return 0, false, err
+	}
+
+	totals, err := gatherWindowTotals(ctx, tx, projectID, reads)
+	if err != nil {
+		return 0, false, err
+	}
+
+	if !admit(totals) {
+		return 0, false, nil
+	}
+
+	id, err := insertReservation(ctx, tx, projectID, tag, ttl)
+	if err != nil {
+		return 0, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, false, fmt.Errorf("commit admission for project %d tag %q:\n%w", projectID, tag, err)
+	}
+	return id, true, nil
+}
+
+// lockAdmission takes the transaction-scoped advisory lock that serialises admissions for a
+// (project, tag). The lock auto-releases when the transaction ends. hashtext folds the composite
+// key into the lock space; a rare hash collision only makes two unrelated keys serialise, never a
+// correctness problem.
+func lockAdmission(ctx context.Context, q rowQuerier, projectID int64, tag string) error {
+	key := fmt.Sprintf("%d:%s", projectID, tag)
+
+	if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, key); err != nil {
+		return fmt.Errorf("acquire admission lock for project %d tag %q:\n%w", projectID, tag, err)
+	}
+	return nil
+}
+
+// gatherWindowTotals reads the recorded usage and in-flight reservations for each WindowRead,
+// preserving the input order so the caller can match each result back to its window's limits.
+func gatherWindowTotals(ctx context.Context, q rowQuerier, projectID int64, reads []domain.WindowRead) ([]domain.WindowTotals, error) {
+	totals := make([]domain.WindowTotals, len(reads))
+
+	for i, read := range reads {
+		current, err := windowedTotals(ctx, q, projectID, read.Tag, read.Since)
+		if err != nil {
+			return nil, err
+		}
+
+		inflight, err := inflightCalls(ctx, q, projectID, read.Tag)
+		if err != nil {
+			return nil, err
+		}
+		totals[i] = domain.WindowTotals{Current: current, Inflight: inflight}
+	}
+	return totals, nil
+}
+
+// inflightCalls counts the non-expired reservations for a (project, tag) into Totals.Calls. It
+// filters on expires_at without deleting, so it is safe to run inside the read-only admission
+// transaction (pruning of expired rows is housekeeping owned by InflightTotals).
+func inflightCalls(ctx context.Context, q rowQuerier, projectID int64, tag string) (domain.Totals, error) {
 	query := `SELECT COUNT(*)::bigint FROM reservation WHERE project_id = $1 AND expires_at >= now()`
 	args := []any{projectID}
 	if tag != domain.WholeProjectTag {
@@ -88,10 +174,25 @@ func (s *Store) InflightTotals(ctx context.Context, projectID int64, tag string)
 	}
 
 	var totals domain.Totals
-	if err := s.pool.QueryRow(ctx, query, args...).Scan(&totals.Calls); err != nil {
+	if err := q.QueryRow(ctx, query, args...).Scan(&totals.Calls); err != nil {
 		return domain.Totals{}, fmt.Errorf("inflight totals for project %d tag %q:\n%w", projectID, tag, err)
 	}
 	return totals, nil
+}
+
+// insertReservation writes one reservation row expiring ttl from the database clock (avoiding
+// app/DB skew) and returns its id.
+func insertReservation(ctx context.Context, q rowQuerier, projectID int64, tag string, ttl time.Duration) (int64, error) {
+	const query = `
+INSERT INTO reservation (project_id, tag, expires_at)
+VALUES ($1, $2, now() + make_interval(secs => $3))
+RETURNING id`
+
+	var id int64
+	if err := q.QueryRow(ctx, query, projectID, tag, ttl.Seconds()).Scan(&id); err != nil {
+		return 0, fmt.Errorf("reserve for project %d tag %q:\n%w", projectID, tag, err)
+	}
+	return id, nil
 }
 
 // pruneExpiredReservations deletes every reservation whose TTL has elapsed. It runs before each

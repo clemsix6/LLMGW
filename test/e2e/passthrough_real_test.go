@@ -1,29 +1,28 @@
 package e2e
 
 // This suite drives the FULL gateway (POST /v1/messages) against the REAL Anthropic API: it
-// boots the gateway + an ephemeral Postgres, seeds a Claude Max refresh token, forwards a tiny
-// real request, and asserts both the HTTP response and the recorded DB state. It is the proof
-// that LLMGW is a working drop-in replacement for clewdr's /code path. Gated on
+// boots the gateway + an ephemeral Postgres, seeds the shared Claude Max access token, forwards a
+// tiny real request, and asserts both the HTTP response and the recorded DB state. It is the
+// proof that LLMGW is a working drop-in replacement for clewdr's /code path. Gated on
 // LLMGW_TEST_REFRESH_TOKEN; skips when absent.
 //
-// Re-source .env before each run so the rotated refresh token is picked up:
+// TestMain refreshes the single-use token once and writes the rotation back to .env, so this test
+// triggers no refresh of its own. Re-source .env before each run:
 //
 //	set -a; . ./.env; set +a; go test ./test/e2e -run Passthrough -v
-//
-// The .env write-back is registered via t.Cleanup right after seeding, so the rotated token is
-// persisted even if a later assertion fails or the retry budget is exhausted after a refresh.
 
 import (
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/testcontainers/testcontainers-go"
+
+	"github.com/clemsix6/LLMGW/internal/domain"
 )
 
 const (
@@ -37,14 +36,11 @@ const (
 // TestPassthroughRealNonStreaming forwards a tiny real request through the full gateway and
 // asserts a 200 with plausible content, plus a project row and an attributed usage_event.
 func TestPassthroughRealNonStreaming(t *testing.T) {
-	seedToken := os.Getenv("LLMGW_TEST_REFRESH_TOKEN")
-	if seedToken == "" {
-		t.Skip("LLMGW_TEST_REFRESH_TOKEN not set; skipping real-API passthrough test")
-	}
+	token := requireSharedToken(t)
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
 	ctx := context.Background()
-	harness := startPassthroughHarness(t, ctx, seedToken)
+	harness := startPassthroughHarness(t, ctx, token)
 
 	body := postMessagesWithRetry(t, ctx, harness)
 	assertPlausibleMessagesBody(t, body)
@@ -53,9 +49,9 @@ func TestPassthroughRealNonStreaming(t *testing.T) {
 	assertUsageRecorded(t, ctx, harness.DSN, passthroughProject, passthroughTag)
 }
 
-// startPassthroughHarness boots the gateway, seeds the Claude Max provider, and registers the
-// .env token write-back so the rotated refresh token survives even on a later failure.
-func startPassthroughHarness(t *testing.T, ctx context.Context, seedToken string) *Harness {
+// startPassthroughHarness boots the gateway and seeds the Claude Max provider with the shared
+// access token (already fresh, so no per-test refresh occurs).
+func startPassthroughHarness(t *testing.T, ctx context.Context, token domain.Token) *Harness {
 	t.Helper()
 
 	harness, err := Start(ctx)
@@ -64,13 +60,9 @@ func startPassthroughHarness(t *testing.T, ctx context.Context, seedToken string
 	}
 	t.Cleanup(func() { harness.Stop(context.Background()) })
 
-	if err := harness.SeedClaudeMax(ctx, testAccount, seedToken, testClaudeCodeVersion); err != nil {
+	if err := harness.SeedClaudeMax(ctx, testAccount, token, testClaudeCodeVersion); err != nil {
 		t.Fatalf("seed claude max: %v", err)
 	}
-
-	// LIFO: this runs before harness.Stop closes the store, so the rotated token is readable.
-	t.Cleanup(func() { rotateEnvToken(t, ctx, harness.store) })
-
 	return harness
 }
 

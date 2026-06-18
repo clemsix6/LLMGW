@@ -4,16 +4,11 @@ package e2e
 // core validation that the OAuth refresh + Claude Code spoof still pass Anthropic's
 // anti-abuse today. It is gated on LLMGW_TEST_REFRESH_TOKEN and skips when absent.
 //
-// Token rotation: an OAuth refresh rotates the refresh_token. After a successful call the
-// rotated token is persisted to the (ephemeral) store; this test writes it back into the
-// repo .env (LLMGW_TEST_REFRESH_TOKEN and LLMGW_OAUTH_REFRESH_TOKENS) so a re-run against a
-// fresh DB uses the latest token. Re-source .env before each run:
+// The single-use refresh token is refreshed ONCE per run by TestMain, which caches the resulting
+// access token and writes the rotated refresh token back to .env. This test seeds that shared
+// access token, so it triggers no refresh of its own. Re-source .env before each run:
 //
 //	set -a; . ./.env; set +a; go test ./test/e2e -run Provider -v
-//
-// The write-back is registered via t.Cleanup right after the provider is built, so it runs even
-// if a later assertion fails or sendWithRetry exhausts its retries after a refresh already
-// rotated and persisted the token — the .env always ends with the latest refresh_token.
 
 import (
 	"bytes"
@@ -21,9 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
-	"os"
-	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -67,14 +59,11 @@ func (s *captureSink) Flush() {}
 // TestProviderRealNonStreaming sends a tiny real request through the Claude Max provider and
 // asserts a 200-path success: relayed content of plausible length and metered output tokens.
 func TestProviderRealNonStreaming(t *testing.T) {
-	seedToken := os.Getenv("LLMGW_TEST_REFRESH_TOKEN")
-	if seedToken == "" {
-		t.Skip("LLMGW_TEST_REFRESH_TOKEN not set; skipping real-API provider test")
-	}
+	token := requireSharedToken(t)
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
 	ctx := context.Background()
-	provider := newRealProvider(t, ctx, seedToken)
+	provider := newRealProvider(t, ctx, token)
 
 	req := tinyRequest(t)
 	result, body := sendWithRetry(t, ctx, provider, req)
@@ -82,11 +71,10 @@ func TestProviderRealNonStreaming(t *testing.T) {
 	assertPlausibleReply(t, body, result)
 }
 
-// newRealProvider boots an ephemeral Postgres, seeds the refresh token, and builds a Claude
-// Max provider bound to the test account. It registers the .env token write-back via t.Cleanup
-// so the rotated refresh_token is persisted even if a later assertion fails or sendWithRetry
-// exhausts its retries after a refresh already rotated the token.
-func newRealProvider(t *testing.T, ctx context.Context, seedToken string) *claudemax.Provider {
+// newRealProvider boots an ephemeral Postgres, seeds the shared access token, and builds a Claude
+// Max provider bound to the test account. The seeded token is already fresh, so the provider
+// serves it directly without a refresh.
+func newRealProvider(t *testing.T, ctx context.Context, token domain.Token) *claudemax.Provider {
 	t.Helper()
 
 	container, dsn, err := startPostgres(ctx)
@@ -101,17 +89,11 @@ func newRealProvider(t *testing.T, ctx context.Context, seedToken string) *claud
 	}
 	t.Cleanup(store.Close)
 
-	if err := store.SaveToken(ctx, testAccount, domain.Token{RefreshToken: seedToken}); err != nil {
+	if err := store.SaveToken(ctx, testAccount, token); err != nil {
 		t.Fatalf("seed token: %v", err)
 	}
 
-	provider := claudemax.New(store, testAccount, testClaudeCodeVersion)
-
-	// Write the rotated refresh token back to .env on test exit (LIFO: before store.Close), so it
-	// runs even on a later assertion failure or retry exhaustion after a refresh persisted a token.
-	t.Cleanup(func() { rotateEnvToken(t, ctx, store) })
-
-	return provider
+	return claudemax.New(store, testAccount, testClaudeCodeVersion)
 }
 
 // tinyRequest builds a minimal non-streaming Messages request.
@@ -232,57 +214,4 @@ func joinText(resp anthropicResponse) string {
 		}
 	}
 	return b.String()
-}
-
-// rotateEnvToken reads the rotated refresh token the successful call persisted and writes it
-// back to the repo .env so the gated suite stays re-runnable against a fresh DB.
-func rotateEnvToken(t *testing.T, ctx context.Context, store *postgres.Store) {
-	t.Helper()
-
-	rotated, err := store.LoadToken(ctx, testAccount)
-	if err != nil {
-		t.Logf("skip token write-back: load rotated token: %v", err)
-		return
-	}
-	if rotated.RefreshToken == "" {
-		t.Log("skip token write-back: rotated refresh token is empty")
-		return
-	}
-
-	writeEnvToken(t, rotated.RefreshToken)
-}
-
-// writeEnvToken rewrites the refresh-token lines of the repo .env in place.
-func writeEnvToken(t *testing.T, newToken string) {
-	t.Helper()
-
-	path := envFilePath()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Logf("skip token write-back: read %s: %v", path, err)
-		return
-	}
-
-	lines := strings.Split(string(data), "\n")
-	for i, line := range lines {
-		switch {
-		case strings.HasPrefix(line, "LLMGW_TEST_REFRESH_TOKEN="):
-			lines[i] = "LLMGW_TEST_REFRESH_TOKEN=" + newToken
-		case strings.HasPrefix(line, "LLMGW_OAUTH_REFRESH_TOKENS="):
-			lines[i] = "LLMGW_OAUTH_REFRESH_TOKENS=" + testAccount + "=" + newToken
-		}
-	}
-
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
-		t.Logf("skip token write-back: write %s: %v", path, err)
-		return
-	}
-	t.Logf("rotated refresh token written back to %s", path)
-}
-
-// envFilePath returns the repo-root .env path, resolved relative to this test file so it is
-// independent of the working directory.
-func envFilePath() string {
-	_, file, _, _ := runtime.Caller(0)
-	return filepath.Join(filepath.Dir(file), "..", "..", ".env")
 }
