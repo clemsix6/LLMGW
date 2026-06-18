@@ -39,12 +39,14 @@ type messagesHandler struct {
 	store domain.Store // store resolves projects, routes, and persists usage.
 
 	providerName string // providerName labels the serving backend on each usage_event.
+
+	defaultProject string // defaultProject is attributed to requests that omit X-Project; empty keeps the header required.
 }
 
 // handle validates the request envelope then forwards it (streaming and non-streaming alike).
 func (h *messagesHandler) handle(w http.ResponseWriter, r *http.Request) {
-	project := r.Header.Get(headerProject)
-	if project == "" {
+	project, ok := resolveProject(r.Header.Get(headerProject), h.defaultProject)
+	if !ok {
 		writeError(w, http.StatusBadRequest, "missing_project", "X-Project header is required")
 		return
 	}
@@ -180,6 +182,19 @@ func parseBody(w http.ResponseWriter, r *http.Request) (llm.ChatRequest, bool) {
 		return llm.ChatRequest{}, false
 	}
 	return req, true
+}
+
+// resolveProject returns the project a request is attributed to: the X-Project header when
+// present, otherwise the configured default project. ok is false when neither is set, which the
+// caller maps to a 400 — a request must always be attributable to a project.
+func resolveProject(header, fallback string) (string, bool) {
+	if header != "" {
+		return header, true
+	}
+	if fallback != "" {
+		return fallback, true
+	}
+	return "", false
 }
 
 // tagOrDefault returns the request tag, falling back to defaultTag when the header is absent.

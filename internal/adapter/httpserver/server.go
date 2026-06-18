@@ -27,9 +27,10 @@ type Server struct {
 
 // New constructs a Server with its routes registered. The store backs the /v1/messages
 // passthrough (project resolution, routing, usage recording); providerName labels the
-// serving backend on every recorded usage_event.
-func New(store domain.Store, providerName string) *Server {
-	messages := &messagesHandler{store: store, providerName: providerName}
+// serving backend on every recorded usage_event; defaultProject is attributed to requests
+// that omit the X-Project header (empty keeps the header required).
+func New(store domain.Store, providerName, defaultProject string) *Server {
+	messages := &messagesHandler{store: store, providerName: providerName, defaultProject: defaultProject}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)

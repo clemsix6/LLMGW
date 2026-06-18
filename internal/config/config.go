@@ -16,6 +16,8 @@ type Config struct {
 	SessionKeys []SessionKey // SessionKeys seeds the per-account claude.ai session keys that bootstrap OAuth tokens.
 
 	ClaudeCodeVersion string // ClaudeCodeVersion is the spoofed Claude Code client version.
+
+	DefaultProject string // DefaultProject is attributed to requests that omit the X-Project header; empty keeps X-Project required.
 }
 
 // SessionKey is a single seed claude.ai session key bound to an account label.
@@ -54,6 +56,7 @@ func Load() (Config, error) {
 		PostgresDSN:       dsn,
 		SessionKeys:       keys,
 		ClaudeCodeVersion: valueOr(os.Getenv("LLMGW_CLAUDE_CODE_VERSION"), defaultClaudeCodeVersion),
+		DefaultProject:    os.Getenv("LLMGW_DEFAULT_PROJECT"),
 	}, nil
 }
 

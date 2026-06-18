@@ -53,7 +53,7 @@ func Start(ctx context.Context) (*Harness, error) {
 		return nil, fmt.Errorf("listen:\n%w", err)
 	}
 
-	server := httpserver.New(store, postgres.DefaultProviderName)
+	server := httpserver.New(store, postgres.DefaultProviderName, "")
 	go func() { _ = server.Serve(listener) }()
 
 	return &Harness{
