@@ -36,6 +36,12 @@ func New(store domain.Store, providerName, defaultProject string) *Server {
 	mux.HandleFunc("GET /health", handleHealth)
 	mux.HandleFunc("POST /v1/messages", messages.handle)
 
+	// Some OpenAI-wire clients (e.g. Hermes Agent) hardcode POST /chat/completions as their
+	// endpoint path even when configured for an Anthropic provider — they still send a native
+	// Anthropic Messages body. Alias that path to the same handler so those clients work with no
+	// format translation: the body is already Anthropic and auth is a no-op (local, trusted).
+	mux.HandleFunc("POST /chat/completions", messages.handle)
+
 	return &Server{
 		httpServer: &http.Server{
 			Handler:           mux,
