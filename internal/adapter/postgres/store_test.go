@@ -93,6 +93,83 @@ func TestTokenRoundTrip(t *testing.T) {
 	assertTokenEqual(t, got, rotated)
 }
 
+func TestWindowedTotals(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	projectID, err := store.EnsureProject(ctx, "metrics")
+	if err != nil {
+		t.Fatalf("EnsureProject: %v", err)
+	}
+
+	now := time.Now().UTC()
+	seedUsage(t, ctx, store, projectID, "news", now.Add(-30*time.Minute), 100, 40, 0.10)
+	seedUsage(t, ctx, store, projectID, "news", now.Add(-2*time.Hour), 200, 80, 0.20)
+	seedUsage(t, ctx, store, projectID, "feed", now.Add(-10*time.Minute), 50, 10, 0.05)
+	seedUsage(t, ctx, store, projectID, "news", now.Add(-48*time.Hour), 999, 999, 9.99) // outside both windows
+
+	hourAgo := now.Add(-time.Hour)
+	dayAgo := now.Add(-24 * time.Hour)
+
+	// Hourly window, news tag: only the 30-minute-old event.
+	assertTotals(t, store, ctx, projectID, "news", hourAgo, domain.Totals{Calls: 1, InputTokens: 100, OutputTokens: 40, CostUSD: 0.10})
+
+	// Daily window, news tag: the 30-minute + 2-hour events (the 48h one is excluded).
+	assertTotals(t, store, ctx, projectID, "news", dayAgo, domain.Totals{Calls: 2, InputTokens: 300, OutputTokens: 120, CostUSD: 0.30})
+
+	// Daily window, whole project: every tag inside 24h (news x2 + feed x1).
+	assertTotals(t, store, ctx, projectID, domain.WholeProjectTag, dayAgo, domain.Totals{Calls: 3, InputTokens: 350, OutputTokens: 130, CostUSD: 0.35})
+
+	// Hourly window, whole project: 30-minute news + 10-minute feed.
+	assertTotals(t, store, ctx, projectID, domain.WholeProjectTag, hourAgo, domain.Totals{Calls: 2, InputTokens: 150, OutputTokens: 50, CostUSD: 0.15})
+}
+
+// seedUsage records one usage_event for the project/tag at the given timestamp.
+func seedUsage(t *testing.T, ctx context.Context, store *Store, projectID int64, tag string, ts time.Time, in, out int, cost float64) {
+	t.Helper()
+
+	event := domain.UsageEvent{
+		Timestamp:    ts,
+		ProjectID:    projectID,
+		Tag:          tag,
+		Model:        "claude-sonnet-4-6",
+		Provider:     DefaultProviderName,
+		InputTokens:  in,
+		OutputTokens: out,
+		CostUSD:      cost,
+		Status:       "ok",
+		LatencyMS:    123,
+	}
+	if err := store.RecordUsage(ctx, event); err != nil {
+		t.Fatalf("RecordUsage(%s @ %s): %v", tag, ts, err)
+	}
+}
+
+// assertTotals fails unless WindowedTotals for the (project, tag, since) matches want.
+func assertTotals(t *testing.T, store *Store, ctx context.Context, projectID int64, tag string, since time.Time, want domain.Totals) {
+	t.Helper()
+
+	got, err := store.WindowedTotals(ctx, projectID, tag, since)
+	if err != nil {
+		t.Fatalf("WindowedTotals(tag=%q): %v", tag, err)
+	}
+	if got.Calls != want.Calls || got.InputTokens != want.InputTokens || got.OutputTokens != want.OutputTokens {
+		t.Errorf("WindowedTotals(tag=%q) counts = %+v, want %+v", tag, got, want)
+	}
+	if !floatsClose(got.CostUSD, want.CostUSD) {
+		t.Errorf("WindowedTotals(tag=%q) cost = %v, want %v", tag, got.CostUSD, want.CostUSD)
+	}
+}
+
+// floatsClose reports whether two USD amounts match within a cent's rounding tolerance.
+func floatsClose(a, b float64) bool {
+	diff := a - b
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff < 1e-9
+}
+
 // assertTokenEqual fails the test unless the two tokens carry identical credentials and expiry.
 func assertTokenEqual(t *testing.T, got, want domain.Token) {
 	t.Helper()

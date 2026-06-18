@@ -160,6 +160,100 @@ func TestBytesPreservesUnknownFields(t *testing.T) {
 	}
 }
 
+func TestNormalizeDropsBlankSystemBlocks(t *testing.T) {
+	req := parse(t, `{"system":[
+		{"type":"text","text":"keep me"},
+		{"type":"text","text":"   "},
+		{"type":"text","text":""}
+	]}`)
+
+	system := systemBlocks(t, req.Normalize())
+
+	if len(system) != 1 {
+		t.Fatalf("system blocks = %d, want 1 (blank blocks dropped)", len(system))
+	}
+	assertTextBlock(t, system[0], "keep me")
+}
+
+func TestNormalizeStripsEphemeralScopeFromEphemeralObject(t *testing.T) {
+	req := parse(t, `{"system":[
+		{"type":"text","text":"cached","cache_control":{"ephemeral":{"scope":"shared","ttl":"1h"}}}
+	]}`)
+
+	system := systemBlocks(t, req.Normalize())
+
+	cacheControl := blockCacheControl(t, system[0])
+	ephemeral, ok := cacheControl["ephemeral"].(map[string]any)
+	if !ok {
+		t.Fatalf("cache_control.ephemeral missing or not an object: %v", cacheControl)
+	}
+	if _, present := ephemeral["scope"]; present {
+		t.Errorf("ephemeral.scope was not stripped: %v", ephemeral)
+	}
+	if ephemeral["ttl"] != "1h" {
+		t.Errorf("ephemeral.ttl = %v, want \"1h\" (rest of cache_control must be intact)", ephemeral["ttl"])
+	}
+}
+
+func TestNormalizeStripsScopeFromEphemeralTypeBlock(t *testing.T) {
+	req := parse(t, `{"system":[
+		{"type":"text","text":"cached","cache_control":{"type":"ephemeral","scope":"shared"}}
+	]}`)
+
+	system := systemBlocks(t, req.Normalize())
+
+	cacheControl := blockCacheControl(t, system[0])
+	if _, present := cacheControl["scope"]; present {
+		t.Errorf("cache_control.scope was not stripped: %v", cacheControl)
+	}
+	if cacheControl["type"] != "ephemeral" {
+		t.Errorf("cache_control.type = %v, want \"ephemeral\" (rest must be intact)", cacheControl["type"])
+	}
+}
+
+func TestNormalizeDoesNotMutateOriginal(t *testing.T) {
+	req := parse(t, `{"system":[
+		{"type":"text","text":"   "},
+		{"type":"text","text":"x","cache_control":{"ephemeral":{"scope":"shared"}}}
+	]}`)
+
+	_ = req.Normalize()
+
+	system, ok := req.body["system"].([]any)
+	if !ok || len(system) != 2 {
+		t.Fatalf("original system mutated: %v", req.body["system"])
+	}
+	original := system[1].(map[string]any)
+	cacheControl := original["cache_control"].(map[string]any)
+	ephemeral := cacheControl["ephemeral"].(map[string]any)
+	if _, present := ephemeral["scope"]; !present {
+		t.Error("Normalize mutated the original request's ephemeral.scope")
+	}
+}
+
+func TestNormalizeLeavesStringSystemUntouched(t *testing.T) {
+	req := parse(t, `{"system":"plain system"}`)
+
+	if got := req.Normalize().body["system"]; got != "plain system" {
+		t.Errorf("Normalize changed a string system to %v, want %q", got, "plain system")
+	}
+}
+
+// blockCacheControl returns the cache_control object of a decoded system block.
+func blockCacheControl(t *testing.T, block any) map[string]any {
+	t.Helper()
+
+	obj, ok := block.(map[string]any)
+	if !ok {
+		t.Fatalf("block is not an object: %T", block)
+	}
+	cacheControl, ok := obj["cache_control"].(map[string]any)
+	if !ok {
+		t.Fatalf("block has no cache_control object: %v", obj)
+	}
+	return cacheControl
+}
+
 // parse decodes body into a ChatRequest, failing the test on error.
 func parse(t *testing.T, body string) ChatRequest {
 	t.Helper()

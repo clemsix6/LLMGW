@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+
+	"github.com/clemsix6/LLMGW/internal/domain"
 )
 
 // Server is the gateway's HTTP surface.
@@ -13,10 +15,15 @@ type Server struct {
 	httpServer *http.Server // httpServer is the underlying stdlib server.
 }
 
-// New constructs a Server with its routes registered.
-func New() *Server {
+// New constructs a Server with its routes registered. The store backs the /v1/messages
+// passthrough (project resolution, routing, usage recording); providerName labels the
+// serving backend on every recorded usage_event.
+func New(store domain.Store, providerName string) *Server {
+	messages := &messagesHandler{store: store, providerName: providerName}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
+	mux.HandleFunc("POST /v1/messages", messages.handle)
 
 	return &Server{
 		httpServer: &http.Server{Handler: mux},

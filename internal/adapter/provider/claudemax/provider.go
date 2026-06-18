@@ -101,10 +101,10 @@ func (p *Provider) Send(ctx context.Context, req llm.ChatRequest, out domain.Str
 	return p.handleResponse(resp, out)
 }
 
-// buildRequest injects the Claude Code system block, serialises the body, and applies the
-// spoof headers and bearer token.
+// buildRequest normalizes the request for the OAuth surface, injects the Claude Code system
+// block, serialises the body, and applies the spoof headers and bearer token.
 func (p *Provider) buildRequest(ctx context.Context, req llm.ChatRequest, token string) (*http.Request, error) {
-	spoofed := req.WithClaudeCodeSystem(p.spoof.billingHeader(req.FirstUserText()))
+	spoofed := req.Normalize().WithClaudeCodeSystem(p.spoof.billingHeader(req.FirstUserText()))
 
 	endpoint := p.baseURL + "/v1/messages"
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(spoofed.Bytes()))

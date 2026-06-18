@@ -55,7 +55,7 @@ func run() error {
 	}
 
 	log.Printf("llmgw listening on %s", listener.Addr())
-	return httpserver.New().Serve(listener)
+	return httpserver.New(store, postgres.DefaultProviderName).Serve(listener)
 }
 
 // providerAccount picks the account label the V1 provider serves: the first configured

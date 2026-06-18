@@ -14,6 +14,11 @@ import (
 // Callers use it to decide whether to seed a token from configuration.
 var ErrTokenNotFound = errors.New("oauth token not found")
 
+// WholeProjectTag is the tag sentinel that selects a project-wide aggregate across every tag
+// in WindowedTotals and InflightTotals. Request tags are never empty (X-Tags defaults to a
+// real tag), so the empty string unambiguously means "all tags of the project".
+const WholeProjectTag = ""
+
 // Clock abstracts the current time so windowed budget logic can be tested deterministically.
 type Clock interface {
 	// Now returns the current time.

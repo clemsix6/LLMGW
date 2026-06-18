@@ -1,6 +1,7 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/clemsix6/LLMGW/internal/adapter/httpserver"
 	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
+	"github.com/clemsix6/LLMGW/internal/adapter/provider/claudemax"
+	"github.com/clemsix6/LLMGW/internal/domain"
 )
 
 // Harness is a booted gateway backed by an ephemeral Postgres container.
@@ -50,7 +53,7 @@ func Start(ctx context.Context) (*Harness, error) {
 		return nil, fmt.Errorf("listen:\n%w", err)
 	}
 
-	server := httpserver.New()
+	server := httpserver.New(store, postgres.DefaultProviderName)
 	go func() { _ = server.Serve(listener) }()
 
 	return &Harness{
@@ -85,6 +88,35 @@ func startPostgres(ctx context.Context) (*tcpostgres.PostgresContainer, string, 
 		return nil, "", fmt.Errorf("postgres connection string:\n%w", err)
 	}
 	return container, dsn, nil
+}
+
+// SeedClaudeMax persists a seed refresh token for the account and wires the Claude Max provider
+// so the gateway can forward to the real Anthropic API. It must be called before issuing any
+// /v1/messages request (the handler resolves the provider lazily, per request).
+func (h *Harness) SeedClaudeMax(ctx context.Context, account, refreshToken, version string) error {
+	if err := h.store.SaveToken(ctx, account, domain.Token{RefreshToken: refreshToken}); err != nil {
+		return fmt.Errorf("seed token:\n%w", err)
+	}
+	h.store.SetDefaultProvider(claudemax.New(h.store, account, version))
+	return nil
+}
+
+// Post issues a single POST against the gateway with the given body and headers. Retries are
+// the caller's responsibility (transient upstream errors are not the gateway's own assertions).
+func (h *Harness) Post(ctx context.Context, path string, body []byte, headers map[string]string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.BaseURL+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("build request:\n%w", err)
+	}
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("POST %s:\n%w", path, err)
+	}
+	return resp, nil
 }
 
 // Stop shuts the gateway down and terminates the Postgres container.

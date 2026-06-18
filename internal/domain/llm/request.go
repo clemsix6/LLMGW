@@ -130,6 +130,97 @@ func cloneTopLevel(body map[string]any) map[string]any {
 	return clone
 }
 
+// Normalize returns a copy of the request with the minimal system-block transforms the OAuth
+// surface requires before forwarding, mirroring clewdr's drop_empty_system +
+// strip_ephemeral_scope_from_system: whitespace-only system text blocks are dropped and the
+// ephemeral cache_control "scope" is stripped from the remaining blocks. Consumers using
+// prompt caching send these and Anthropic rejects them otherwise. Everything else is left
+// untouched, and the original request is never mutated.
+func (r ChatRequest) Normalize() ChatRequest {
+	system, ok := r.body["system"].([]any)
+	if !ok {
+		return r
+	}
+
+	body := cloneTopLevel(r.body)
+	body["system"] = normalizeSystem(system)
+	return ChatRequest{body: body}
+}
+
+// normalizeSystem returns a new system array with blank text blocks removed and the ephemeral
+// scope stripped from the remaining blocks.
+func normalizeSystem(blocks []any) []any {
+	normalized := make([]any, 0, len(blocks))
+	for _, raw := range blocks {
+		block, ok := raw.(map[string]any)
+		if !ok {
+			normalized = append(normalized, raw)
+			continue
+		}
+		if isBlankTextBlock(block) {
+			continue
+		}
+		normalized = append(normalized, stripEphemeralScope(block))
+	}
+	return normalized
+}
+
+// isBlankTextBlock reports whether a system block is a text block whose text is empty or only
+// whitespace (clewdr drop_empty_system parity, applied per block).
+func isBlankTextBlock(block map[string]any) bool {
+	if blockType, _ := block["type"].(string); blockType != "text" {
+		return false
+	}
+	text, _ := block["text"].(string)
+	return strings.TrimSpace(text) == ""
+}
+
+// stripEphemeralScope returns the block with the ephemeral cache_control "scope" removed,
+// covering both clewdr shapes: cache_control.ephemeral.scope and cache_control with
+// type "ephemeral" carrying a top-level scope. The block (and the affected sub-maps) are
+// cloned only when a scope is actually present, so the original request stays untouched and
+// the rest of cache_control is preserved.
+func stripEphemeralScope(block map[string]any) map[string]any {
+	cacheControl, ok := block["cache_control"].(map[string]any)
+	if !ok {
+		return block
+	}
+
+	cleaned, changed := cacheControlWithoutScope(cacheControl)
+	if !changed {
+		return block
+	}
+
+	out := cloneTopLevel(block)
+	out["cache_control"] = cleaned
+	return out
+}
+
+// cacheControlWithoutScope returns a copy of a cache_control map with the ephemeral scope
+// removed and reports whether anything was removed.
+func cacheControlWithoutScope(cacheControl map[string]any) (map[string]any, bool) {
+	cleaned := cloneTopLevel(cacheControl)
+	changed := false
+
+	if ephemeral, ok := cleaned["ephemeral"].(map[string]any); ok {
+		if _, has := ephemeral["scope"]; has {
+			ephemeral = cloneTopLevel(ephemeral)
+			delete(ephemeral, "scope")
+			cleaned["ephemeral"] = ephemeral
+			changed = true
+		}
+	}
+
+	if controlType, _ := cleaned["type"].(string); controlType == "ephemeral" {
+		if _, has := cleaned["scope"]; has {
+			delete(cleaned, "scope")
+			changed = true
+		}
+	}
+
+	return cleaned, changed
+}
+
 // Bytes serialises the request body for forwarding upstream.
 func (r ChatRequest) Bytes() []byte {
 	encoded, _ := json.Marshal(r.body)

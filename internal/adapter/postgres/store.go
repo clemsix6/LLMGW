@@ -16,8 +16,9 @@ import (
 var errNotImplemented = errors.New("not implemented")
 
 const (
-	// defaultProviderName identifies the single Claude Max provider used in V1.
-	defaultProviderName = "claude_max"
+	// DefaultProviderName identifies the single Claude Max provider used in V1. The handler
+	// records it as the serving backend on every usage_event.
+	DefaultProviderName = "claude_max"
 
 	// defaultProviderType is the backend type of the V1 Claude Max OAuth provider.
 	defaultProviderType = "claude_max_oauth"
@@ -154,8 +155,8 @@ func (s *Store) defaultProviderID(ctx context.Context) (int64, error) {
 	const query = `SELECT id FROM provider WHERE name = $1`
 
 	var id int64
-	if err := s.pool.QueryRow(ctx, query, defaultProviderName).Scan(&id); err != nil {
-		return 0, fmt.Errorf("resolve default provider %q:\n%w", defaultProviderName, err)
+	if err := s.pool.QueryRow(ctx, query, DefaultProviderName).Scan(&id); err != nil {
+		return 0, fmt.Errorf("resolve default provider %q:\n%w", DefaultProviderName, err)
 	}
 	return id, nil
 }

@@ -20,16 +20,6 @@ func (s *Store) PriceFor(ctx context.Context, model string) (in, out float64, ok
 	return 0, 0, false, errNotImplemented
 }
 
-// RecordUsage is implemented in Batch 3.
-func (s *Store) RecordUsage(ctx context.Context, e domain.UsageEvent) error {
-	return errNotImplemented
-}
-
-// WindowedTotals is implemented in Batch 3.
-func (s *Store) WindowedTotals(ctx context.Context, projectID int64, tag string, since time.Time) (domain.Totals, error) {
-	return domain.Totals{}, errNotImplemented
-}
-
 // Reserve is implemented in Batch 6.
 func (s *Store) Reserve(ctx context.Context, projectID int64, tag string, ttl time.Duration) (reservationID int64, err error) {
 	return 0, errNotImplemented
