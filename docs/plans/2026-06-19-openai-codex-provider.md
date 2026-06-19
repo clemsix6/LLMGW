@@ -8,6 +8,8 @@
 
 **Tech Stack:** Go (stdlib `net/http`), PostgreSQL via `pgx/v5`, hexagonal layout (`internal/domain`, `internal/adapter`, `cmd`). Backend: `https://chatgpt.com/backend-api/codex/responses` (OpenAI Responses wire) over OAuth.
 
+**Execution:** this plan is implemented in a **single run, end to end** — all 13 tasks, every phase. "Phases" are an internal ordering, NOT checkpoints to be relaunched; nothing here is optional or deferred and no task is skipped. The only things excluded are the spec's explicit non-goals (excluded by design, never built — not work to be skipped). The real-backend E2E smokes need the operator's test ChatGPT credentials to actually execute; without them the code is still fully written and the unit + stub-upstream suite passes (the real smokes stay credential-gated, exactly like the existing Claude Max E2E).
+
 **Design spec:** `docs/specs/2026-06-19-openai-codex-provider-design.md`. Section references below (e.g. "spec §5.2") point at its mapping tables.
 
 ## Global Constraints
@@ -373,7 +375,7 @@ git commit -m "Route-based server wiring" -m $'[&] httpserver.New registers one 
 
 ## Phase 2 — `codex` skeleton: OAuth + spoofed Responses call
 
-> **Capture dependency:** Phases 2–3 imitate the real Codex client. Before coding the spoof and translation, capture one real round-trip with a debugging proxy (e.g. `mitmproxy`) in front of the official Codex CLI authenticated with the test ChatGPT account: record the exact request headers (`originator`, `User-Agent`, `ChatGPT-Account-ID`, `x-client-request-id`, …), **the `instructions` value AND whether a minimal one is accepted or the full Codex prompt is required**, the request body shape, the OAuth token endpoint + client_id, and a full streamed Responses event sequence (including the `response.completed` payload). Store redacted samples under `internal/adapter/provider/codex/testdata/`.
+> **Wire sourcing (done INSIDE the run, first step of Phase 2 — not a manual prerequisite):** the Codex wire is undocumented but fully reverse-engineered in public reference implementations (`codex-proxy`, `ChatMock`, `opencode-openai-codex-auth`). Pull the concrete facts from them and pin them as constants + `testdata/`: the OAuth token endpoint + Codex `client_id`, the request header set (`originator`, `User-Agent`, `ChatGPT-Account-ID`, `x-client-request-id`, …), the request/response body shapes, a full streamed Responses event sequence (incl. the `response.completed` payload) as `testdata/responses_stream.sse` / `responses_completed.json`, and the Codex `instructions` prompt (minimal + full). These are interface facts (endpoints, header names, formats) — sourced the same way the project already spoofs Claude Code. A `mitmproxy` capture against the real Codex CLI is an optional cross-check when credentials are available, never a blocker.
 
 ### Task 6: Migrations + `CodexProviderName` constant
 
@@ -397,7 +399,7 @@ ON CONFLICT (name) DO NOTHING;
 ALTER TABLE oauth_token ADD COLUMN chatgpt_account_id TEXT;
 ```
 
-- [ ] **Step 3: Notional prices** (`0008`, replace numbers with verified ones from capture):
+- [ ] **Step 3: Notional prices** (`0008`, numbers from the reference implementations / OpenAI public list prices):
 
 ```sql
 INSERT INTO model_price (model, input_usd_per_mtok, output_usd_per_mtok) VALUES
@@ -692,8 +694,8 @@ git commit -m "Codex multi-account pool and cooldown" -m $'[+] round-robin selec
 7. E2E quota burn (🟡) → Constraints + Tasks 12–13 (small real smoke; stub/unit for the rest).
 8. Double full-parse / `Body` vs `Bytes` (🟢) → Task 1 (`Bytes`) + Task 4 (light-parse wire; single full parse in the provider).
 
-**Capture dependency:** Tasks 8–11 depend on the Phase 2 capture (headers, OAuth endpoint, Responses event shapes, instructions acceptance). Flagged at Phase 2; concrete work, not a placeholder.
+**Wire sourcing:** Tasks 8–11 consume the wire facts pulled in Phase 2's first step from the public reference implementations (headers, OAuth endpoint + `client_id`, Responses event shapes, the Codex `instructions` prompt). Part of the single run — no manual capture prerequisite, no placeholders left in merged code.
 
-**Values to verify at capture (replace before merge):** exact Codex header set + `User-Agent`/`originator`; OAuth token endpoint + client_id; whether minimal `instructions` is accepted or the full prompt is required; real Codex model list + verified `model_price` numbers (Task 6 placeholders).
+**Verified against the real backend:** the small E2E smoke set is the final confirmation the sourced wire is correct; it runs when the operator's test credentials are present (the unit + stub suite is green regardless).
 
 **Type consistency:** `llm.Request`/`Bytes()` (Task 1) used by wires (Task 4) and `openaiRequest` (Task 9); `domain.ProviderError` (Task 2) implemented by claudemax (Task 2) and codex (Tasks 8, 13); `translateRequest`/`translateResponse`/`aggregateCompleted`/`relayTranslatedStream` consistent across Tasks 9–12; `CodexProviderName` used in Tasks 6, 7, 12.
