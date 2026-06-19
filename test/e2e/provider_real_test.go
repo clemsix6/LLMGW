@@ -89,7 +89,7 @@ func newRealProvider(t *testing.T, ctx context.Context, token domain.Token) *cla
 	}
 	t.Cleanup(store.Close)
 
-	if err := store.SaveToken(ctx, testAccount, token); err != nil {
+	if err := store.SaveToken(ctx, postgres.DefaultProviderName, testAccount, token); err != nil {
 		t.Fatalf("seed token: %v", err)
 	}
 

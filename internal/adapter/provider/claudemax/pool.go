@@ -52,11 +52,13 @@ func (e *AllCoolingError) RetryAfter() (time.Duration, bool) { return e.After, t
 type accountStore interface {
 	tokenStore
 
-	// LoadAccounts returns every account with its cooldown state, ordered by label.
-	LoadAccounts(ctx context.Context) ([]domain.Account, error)
+	// LoadAccounts returns every account for the named provider with its cooldown state, ordered
+	// by label.
+	LoadAccounts(ctx context.Context, providerName string) ([]domain.Account, error)
 
-	// SetCooldown records that an account is rate-limited until the given time.
-	SetCooldown(ctx context.Context, account string, until time.Time) error
+	// SetCooldown records that an account is rate-limited until the given time under the named
+	// provider.
+	SetCooldown(ctx context.Context, providerName, account string, until time.Time) error
 }
 
 // selectOrder returns the labels of the non-cooling accounts in round-robin order: it advances the
@@ -90,7 +92,7 @@ func cooling(account domain.Account, now time.Time) bool {
 // A persistence failure is logged but not fatal — the next Send simply re-reads the (still
 // un-cooled) account and tries it again.
 func (p *Provider) cool(ctx context.Context, account string, until time.Time) {
-	if err := p.store.SetCooldown(ctx, account, until); err != nil {
+	if err := p.store.SetCooldown(ctx, p.providerName, account, until); err != nil {
 		log.Printf("llmgw: set cooldown for %q: %v", account, err)
 	}
 }
@@ -99,7 +101,7 @@ func (p *Provider) cool(ctx context.Context, account string, until time.Time) {
 // re-reads the pool and sets RetryAfter to the delay until the soonest cooldown clears, falling
 // back to the default when the pool can't be read or carries no cooldown.
 func (p *Provider) allCooling(ctx context.Context, now time.Time) error {
-	accounts, err := p.store.LoadAccounts(ctx)
+	accounts, err := p.store.LoadAccounts(ctx, p.providerName)
 	if err != nil {
 		return &AllCoolingError{After: defaultCooldown}
 	}

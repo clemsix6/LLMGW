@@ -43,14 +43,14 @@ func bootstrapStub(t *testing.T) *httptest.Server {
 
 // managerForBootstrap builds a token manager pointed at the bootstrap stub.
 func managerForBootstrap(t *testing.T, store tokenStore) *tokenManager {
-	m := newTokenManager(store, "2.1.181")
+	m := newTokenManager(store, "2.1.181", claudeMaxProviderName)
 	m.baseURL = bootstrapStub(t).URL
 	return m
 }
 
 func TestOAuthBootstrapsWhenNoRefreshToken(t *testing.T) {
 	store := newFakeTokenStore()
-	store.tokens["acct"] = domain.Token{SessionKey: "sess-abc"} // freshly seeded: session key only
+	store.tokens[tokenKey{claudeMaxProviderName, "acct"}] = domain.Token{SessionKey: "sess-abc"} // freshly seeded: session key only
 
 	m := managerForBootstrap(t, store)
 	got, err := m.Valid(context.Background(), "acct")
@@ -61,7 +61,7 @@ func TestOAuthBootstrapsWhenNoRefreshToken(t *testing.T) {
 		t.Fatalf("access token = %q, want bootstrapped-access", got)
 	}
 
-	saved, _ := store.LoadToken(context.Background(), "acct")
+	saved, _ := store.LoadToken(context.Background(), claudeMaxProviderName, "acct")
 	if saved.RefreshToken != "boot-refresh" {
 		t.Fatalf("persisted refresh = %q, want boot-refresh", saved.RefreshToken)
 	}
@@ -69,7 +69,7 @@ func TestOAuthBootstrapsWhenNoRefreshToken(t *testing.T) {
 
 func TestOAuthReBootstrapsOnInvalidGrant(t *testing.T) {
 	store := newFakeTokenStore()
-	store.tokens["acct"] = domain.Token{
+	store.tokens[tokenKey{claudeMaxProviderName, "acct"}] = domain.Token{
 		AccessToken:  "old",
 		RefreshToken: "dead-refresh",
 		SessionKey:   "sess-abc",
@@ -88,7 +88,7 @@ func TestOAuthReBootstrapsOnInvalidGrant(t *testing.T) {
 
 func TestOAuthDeadRefreshWithoutSessionKeyFails(t *testing.T) {
 	store := newFakeTokenStore()
-	store.tokens["acct"] = domain.Token{
+	store.tokens[tokenKey{claudeMaxProviderName, "acct"}] = domain.Token{
 		AccessToken:  "old",
 		RefreshToken: "dead-refresh", // no session key to recover from
 		ExpiresAt:    time.Now().Add(-time.Hour),

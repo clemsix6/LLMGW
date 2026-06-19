@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -29,6 +30,9 @@ type Store struct {
 	pool *pgxpool.Pool // pool is the connection pool to the state database.
 
 	provider domain.Provider // provider is the backend the single V1 default route resolves to.
+
+	providerIDMu    sync.Mutex       // providerIDMu guards providerIDCache.
+	providerIDCache map[string]int64 // providerIDCache memoises provider name → id lookups so each name hits the DB at most once.
 }
 
 // SetDefaultProvider registers the provider returned by DefaultRoute. It is wired once at
@@ -57,7 +61,7 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 		return nil, fmt.Errorf("apply migrations:\n%w", err)
 	}
 
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool, providerIDCache: make(map[string]int64)}, nil
 }
 
 // Ping verifies connectivity to the database.
@@ -103,10 +107,10 @@ func (s *Store) PriceFor(ctx context.Context, model string) (in, out float64, ok
 	return in, out, true, nil
 }
 
-// LoadToken returns the persisted OAuth token for an account label under the default provider.
+// LoadToken returns the persisted OAuth token for an account label under the named provider.
 // It returns domain.ErrTokenNotFound when no row exists for the account.
-func (s *Store) LoadToken(ctx context.Context, account string) (domain.Token, error) {
-	providerID, err := s.defaultProviderID(ctx)
+func (s *Store) LoadToken(ctx context.Context, providerName, account string) (domain.Token, error) {
+	providerID, err := s.providerIDByName(ctx, providerName)
 	if err != nil {
 		return domain.Token{}, err
 	}
@@ -143,10 +147,10 @@ WHERE provider_id = $1 AND account_label = $2`
 	return token, nil
 }
 
-// SaveToken upserts the OAuth token for an account label under the default provider.
+// SaveToken upserts the OAuth token for an account label under the named provider.
 // It never touches cooldown_until (owned by the provider pool, a later batch).
-func (s *Store) SaveToken(ctx context.Context, account string, t domain.Token) error {
-	providerID, err := s.defaultProviderID(ctx)
+func (s *Store) SaveToken(ctx context.Context, providerName, account string, t domain.Token) error {
+	providerID, err := s.providerIDByName(ctx, providerName)
 	if err != nil {
 		return err
 	}
@@ -166,11 +170,12 @@ ON CONFLICT (provider_id, account_label) DO UPDATE SET
 	return nil
 }
 
-// SeedSessionKey inserts an account's durable session key when the account has no row yet. It is
-// the seed path's sole writer for session_key (never overwriting an existing row), keeping that
-// column's ownership separate from SaveToken, which writes only the derived access/refresh tokens.
-func (s *Store) SeedSessionKey(ctx context.Context, account, sessionKey string) error {
-	providerID, err := s.defaultProviderID(ctx)
+// SeedSessionKey inserts an account's durable session key when the account has no row yet under
+// the named provider. It is the seed path's sole writer for session_key (never overwriting an
+// existing row), keeping that column's ownership separate from SaveToken, which writes only the
+// derived access/refresh tokens.
+func (s *Store) SeedSessionKey(ctx context.Context, providerName, account, sessionKey string) error {
+	providerID, err := s.providerIDByName(ctx, providerName)
 	if err != nil {
 		return err
 	}
@@ -186,16 +191,24 @@ ON CONFLICT (provider_id, account_label) DO NOTHING`
 	return nil
 }
 
-// defaultProviderID resolves the id of the single V1 Claude Max provider by name.
-// The provider row is seeded by migration 0002; this is a read-only lookup with no
-// write side-effect. Filtering token operations on it keeps them unambiguous if a
-// second provider is ever added.
-func (s *Store) defaultProviderID(ctx context.Context) (int64, error) {
+// providerIDByName resolves the integer id of the named provider, memoising the result so each
+// provider name hits the DB at most once per Store lifetime. The mutex is held during the DB call
+// so concurrent misses for the same name serialise rather than issue duplicate queries.
+func (s *Store) providerIDByName(ctx context.Context, name string) (int64, error) {
+	s.providerIDMu.Lock()
+	defer s.providerIDMu.Unlock()
+
+	if id, ok := s.providerIDCache[name]; ok {
+		return id, nil
+	}
+
 	const query = `SELECT id FROM provider WHERE name = $1`
 
 	var id int64
-	if err := s.pool.QueryRow(ctx, query, DefaultProviderName).Scan(&id); err != nil {
-		return 0, fmt.Errorf("resolve default provider %q:\n%w", DefaultProviderName, err)
+	if err := s.pool.QueryRow(ctx, query, name).Scan(&id); err != nil {
+		return 0, fmt.Errorf("resolve provider %q:\n%w", name, err)
 	}
+
+	s.providerIDCache[name] = id
 	return id, nil
 }

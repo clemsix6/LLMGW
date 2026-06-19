@@ -96,7 +96,7 @@ func startPostgres(ctx context.Context) (*tcpostgres.PostgresContainer, string, 
 // the shared access token (refreshed once per run by the coordinator), so the provider serves it
 // directly without triggering a per-test refresh of the single-use refresh token.
 func (h *Harness) SeedClaudeMax(ctx context.Context, account string, token domain.Token, version string) error {
-	if err := h.store.SaveToken(ctx, account, token); err != nil {
+	if err := h.store.SaveToken(ctx, postgres.DefaultProviderName, account, token); err != nil {
 		return fmt.Errorf("seed token:\n%w", err)
 	}
 	h.store.SetDefaultProvider(claudemax.New(h.store, version))

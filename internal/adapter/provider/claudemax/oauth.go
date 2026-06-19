@@ -55,17 +55,19 @@ func (e *DeadRefreshTokenError) RetryAfter() (time.Duration, bool) { return 0, f
 
 // tokenStore is the subset of the persistence port the token manager needs.
 type tokenStore interface {
-	// LoadToken returns the persisted token for an account label.
-	LoadToken(ctx context.Context, account string) (domain.Token, error)
+	// LoadToken returns the persisted token for the given provider name and account label.
+	LoadToken(ctx context.Context, providerName, account string) (domain.Token, error)
 
-	// SaveToken persists the token for an account label.
-	SaveToken(ctx context.Context, account string, t domain.Token) error
+	// SaveToken persists the token for the given provider name and account label.
+	SaveToken(ctx context.Context, providerName, account string, t domain.Token) error
 }
 
 // tokenManager hands out valid OAuth access tokens, refreshing expired ones. Refreshes are
 // single-flight per account and the rotated token is persisted before it is returned.
 type tokenManager struct {
 	store tokenStore // store persists tokens so rotation survives restarts.
+
+	providerName string // providerName is passed to every store call to scope it to the correct provider.
 
 	httpClient *http.Client // httpClient performs the refresh request.
 
@@ -76,10 +78,12 @@ type tokenManager struct {
 	group singleflight.Group // group coalesces concurrent refreshes per account.
 }
 
-// newTokenManager builds a token manager backed by store, pointing at the real OAuth endpoint.
-func newTokenManager(store tokenStore, claudeCodeVersion string) *tokenManager {
+// newTokenManager builds a token manager backed by store, scoped to providerName, and pointing
+// at the real OAuth endpoint.
+func newTokenManager(store tokenStore, claudeCodeVersion, providerName string) *tokenManager {
 	return &tokenManager{
 		store:             store,
+		providerName:      providerName,
 		httpClient:        &http.Client{Timeout: 30 * time.Second},
 		baseURL:           defaultAnthropicBaseURL,
 		claudeCodeVersion: claudeCodeVersion,
@@ -88,7 +92,7 @@ func newTokenManager(store tokenStore, claudeCodeVersion string) *tokenManager {
 
 // Valid returns a non-expired access token for the account, refreshing it if needed.
 func (m *tokenManager) Valid(ctx context.Context, account string) (string, error) {
-	token, err := m.store.LoadToken(ctx, account)
+	token, err := m.store.LoadToken(ctx, m.providerName, account)
 	if err != nil {
 		return "", fmt.Errorf("load token for %q:\n%w", account, err)
 	}
@@ -122,7 +126,7 @@ func (m *tokenManager) refresh(ctx context.Context, account string) (string, err
 // doRefresh exchanges the stored refresh token, persists the rotated token, then returns the
 // fresh access token. The rotated token is committed before use for crash-safety.
 func (m *tokenManager) doRefresh(ctx context.Context, account string) (string, error) {
-	current, err := m.store.LoadToken(ctx, account)
+	current, err := m.store.LoadToken(ctx, m.providerName, account)
 	if err != nil {
 		return "", fmt.Errorf("load token for %q:\n%w", account, err)
 	}
@@ -146,7 +150,7 @@ func (m *tokenManager) doRefresh(ctx context.Context, account string) (string, e
 		return "", err
 	}
 
-	if err := m.store.SaveToken(ctx, account, refreshed); err != nil {
+	if err := m.store.SaveToken(ctx, m.providerName, account, refreshed); err != nil {
 		return "", fmt.Errorf("persist rotated token for %q:\n%w", account, err)
 	}
 	return refreshed.AccessToken, nil
@@ -165,7 +169,7 @@ func (m *tokenManager) bootstrapAndSave(ctx context.Context, account, sessionKey
 		return "", err
 	}
 
-	if err := m.store.SaveToken(ctx, account, token); err != nil {
+	if err := m.store.SaveToken(ctx, m.providerName, account, token); err != nil {
 		return "", fmt.Errorf("persist bootstrapped token for %q:\n%w", account, err)
 	}
 	return token.AccessToken, nil

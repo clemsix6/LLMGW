@@ -59,7 +59,7 @@ func TestTokenRoundTrip(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	if _, err := store.LoadToken(ctx, "acct"); !errors.Is(err, domain.ErrTokenNotFound) {
+	if _, err := store.LoadToken(ctx, DefaultProviderName, "acct"); !errors.Is(err, domain.ErrTokenNotFound) {
 		t.Fatalf("LoadToken(absent) error = %v, want domain.ErrTokenNotFound", err)
 	}
 
@@ -68,11 +68,11 @@ func TestTokenRoundTrip(t *testing.T) {
 		RefreshToken: "refresh-1",
 		ExpiresAt:    time.Now().Add(time.Hour).UTC().Truncate(time.Microsecond),
 	}
-	if err := store.SaveToken(ctx, "acct", want); err != nil {
+	if err := store.SaveToken(ctx, DefaultProviderName, "acct", want); err != nil {
 		t.Fatalf("SaveToken: %v", err)
 	}
 
-	got, err := store.LoadToken(ctx, "acct")
+	got, err := store.LoadToken(ctx, DefaultProviderName, "acct")
 	if err != nil {
 		t.Fatalf("LoadToken: %v", err)
 	}
@@ -83,11 +83,11 @@ func TestTokenRoundTrip(t *testing.T) {
 		RefreshToken: "refresh-2",
 		ExpiresAt:    want.ExpiresAt.Add(8 * time.Hour),
 	}
-	if err := store.SaveToken(ctx, "acct", rotated); err != nil {
+	if err := store.SaveToken(ctx, DefaultProviderName, "acct", rotated); err != nil {
 		t.Fatalf("SaveToken (rotate): %v", err)
 	}
 
-	got, err = store.LoadToken(ctx, "acct")
+	got, err = store.LoadToken(ctx, DefaultProviderName, "acct")
 	if err != nil {
 		t.Fatalf("LoadToken (after rotate): %v", err)
 	}
@@ -101,11 +101,11 @@ func TestSeedSessionKeyAndOwnership(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	if err := store.SeedSessionKey(ctx, "acct", "sess-1"); err != nil {
+	if err := store.SeedSessionKey(ctx, DefaultProviderName, "acct", "sess-1"); err != nil {
 		t.Fatalf("SeedSessionKey: %v", err)
 	}
 
-	got, err := store.LoadToken(ctx, "acct")
+	got, err := store.LoadToken(ctx, DefaultProviderName, "acct")
 	if err != nil {
 		t.Fatalf("LoadToken: %v", err)
 	}
@@ -117,24 +117,47 @@ func TestSeedSessionKeyAndOwnership(t *testing.T) {
 	}
 
 	// Re-seeding never overwrites an existing row.
-	if err := store.SeedSessionKey(ctx, "acct", "sess-2"); err != nil {
+	if err := store.SeedSessionKey(ctx, DefaultProviderName, "acct", "sess-2"); err != nil {
 		t.Fatalf("SeedSessionKey (re-seed): %v", err)
 	}
-	if got, _ = store.LoadToken(ctx, "acct"); got.SessionKey != "sess-1" {
+	if got, _ = store.LoadToken(ctx, DefaultProviderName, "acct"); got.SessionKey != "sess-1" {
 		t.Fatalf("re-seed overwrote session key: got %q, want sess-1", got.SessionKey)
 	}
 
 	// SaveToken (a bootstrap/refresh result) persists access/refresh but must preserve session_key.
 	boot := domain.Token{AccessToken: "acc", RefreshToken: "ref", SessionKey: "ignored", ExpiresAt: time.Now().Add(time.Hour)}
-	if err := store.SaveToken(ctx, "acct", boot); err != nil {
+	if err := store.SaveToken(ctx, DefaultProviderName, "acct", boot); err != nil {
 		t.Fatalf("SaveToken: %v", err)
 	}
-	got, _ = store.LoadToken(ctx, "acct")
+	got, _ = store.LoadToken(ctx, DefaultProviderName, "acct")
 	if got.AccessToken != "acc" || got.RefreshToken != "ref" {
 		t.Fatalf("SaveToken did not persist derived tokens: %+v", got)
 	}
 	if got.SessionKey != "sess-1" {
 		t.Fatalf("SaveToken clobbered session key: got %q, want sess-1 (SaveToken must not own session_key)", got.SessionKey)
+	}
+}
+
+// TestTokenRoundTripScopedByProvider proves that a token saved under one provider name is not
+// visible when loading under a different provider name — tokens of one provider cannot leak into
+// another's queries.
+func TestTokenRoundTripScopedByProvider(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	// Seed a second provider row so providerIDByName can resolve it.
+	if _, err := store.pool.Exec(ctx, `INSERT INTO provider (name, type) VALUES ('chatgpt-codex', 'openrouter')`); err != nil {
+		t.Fatalf("seed provider: %v", err)
+	}
+
+	want := domain.Token{RefreshToken: "rt", AccessToken: "at"}
+	if err := store.SaveToken(ctx, "chatgpt-codex", "acct", want); err != nil {
+		t.Fatal(err)
+	}
+
+	// The default provider must NOT see the chatgpt-codex token.
+	if _, err := store.LoadToken(ctx, DefaultProviderName, "acct"); err == nil {
+		t.Fatal("token leaked across providers")
 	}
 }
 

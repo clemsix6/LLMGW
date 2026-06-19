@@ -14,35 +14,42 @@ import (
 	"github.com/clemsix6/LLMGW/internal/domain"
 )
 
+// tokenKey is the composite key used by fakeTokenStore to scope tokens by provider name.
+type tokenKey struct {
+	provider string // provider is the provider name.
+	account  string // account is the account label.
+}
+
 // fakeTokenStore is an in-memory, concurrency-safe tokenStore for OAuth manager tests.
 type fakeTokenStore struct {
 	mu     sync.Mutex
-	tokens map[string]domain.Token
+	tokens map[tokenKey]domain.Token // tokens is keyed by (provider, account) for isolation.
 }
 
 // newFakeTokenStore returns an empty in-memory token store.
 func newFakeTokenStore() *fakeTokenStore {
-	return &fakeTokenStore{tokens: map[string]domain.Token{}}
+	return &fakeTokenStore{tokens: map[tokenKey]domain.Token{}}
 }
 
-// LoadToken returns the stored token or domain.ErrTokenNotFound.
-func (f *fakeTokenStore) LoadToken(_ context.Context, account string) (domain.Token, error) {
+// LoadToken returns the stored token for the given provider name and account label, or
+// domain.ErrTokenNotFound when absent.
+func (f *fakeTokenStore) LoadToken(_ context.Context, providerName, account string) (domain.Token, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	token, ok := f.tokens[account]
+	token, ok := f.tokens[tokenKey{providerName, account}]
 	if !ok {
 		return domain.Token{}, domain.ErrTokenNotFound
 	}
 	return token, nil
 }
 
-// SaveToken stores the token for an account.
-func (f *fakeTokenStore) SaveToken(_ context.Context, account string, t domain.Token) error {
+// SaveToken stores the token for the given provider name and account label.
+func (f *fakeTokenStore) SaveToken(_ context.Context, providerName, account string, t domain.Token) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.tokens[account] = t
+	f.tokens[tokenKey{providerName, account}] = t
 	return nil
 }
 
@@ -76,7 +83,7 @@ func successBody(access, refresh string, expiresIn int) string {
 
 // managerFor builds a token manager pointed at the stub base URL.
 func managerFor(store tokenStore, baseURL string) *tokenManager {
-	m := newTokenManager(store, "2.1.181")
+	m := newTokenManager(store, "2.1.181", claudeMaxProviderName)
 	m.baseURL = baseURL
 	return m
 }
@@ -88,7 +95,7 @@ func expiredToken(refresh string) domain.Token {
 
 func TestOAuthRefreshesExpiredToken(t *testing.T) {
 	store := newFakeTokenStore()
-	store.tokens["acct"] = expiredToken("r1")
+	store.tokens[tokenKey{claudeMaxProviderName, "acct"}] = expiredToken("r1")
 	stub := newStubOAuth(t, http.StatusOK, successBody("new-access", "r2", 28800), 0)
 	m := managerFor(store, stub.server.URL)
 
@@ -106,7 +113,7 @@ func TestOAuthRefreshesExpiredToken(t *testing.T) {
 
 func TestOAuthValidUsesCachedTokenWhenFresh(t *testing.T) {
 	store := newFakeTokenStore()
-	store.tokens["acct"] = domain.Token{AccessToken: "live", RefreshToken: "r1", ExpiresAt: time.Now().Add(time.Hour)}
+	store.tokens[tokenKey{claudeMaxProviderName, "acct"}] = domain.Token{AccessToken: "live", RefreshToken: "r1", ExpiresAt: time.Now().Add(time.Hour)}
 	stub := newStubOAuth(t, http.StatusOK, successBody("unused", "r2", 28800), 0)
 	m := managerFor(store, stub.server.URL)
 
@@ -124,7 +131,7 @@ func TestOAuthValidUsesCachedTokenWhenFresh(t *testing.T) {
 
 func TestOAuthSingleFlightRefresh(t *testing.T) {
 	store := newFakeTokenStore()
-	store.tokens["acct"] = expiredToken("r1")
+	store.tokens[tokenKey{claudeMaxProviderName, "acct"}] = expiredToken("r1")
 	stub := newStubOAuth(t, http.StatusOK, successBody("new-access", "r2", 28800), 100*time.Millisecond)
 	m := managerFor(store, stub.server.URL)
 
@@ -160,7 +167,7 @@ func TestOAuthSingleFlightRefresh(t *testing.T) {
 
 func TestOAuthPersistsRotatedToken(t *testing.T) {
 	store := newFakeTokenStore()
-	store.tokens["acct"] = expiredToken("r1")
+	store.tokens[tokenKey{claudeMaxProviderName, "acct"}] = expiredToken("r1")
 	stub := newStubOAuth(t, http.StatusOK, successBody("new-access", "rotated", 28800), 0)
 	m := managerFor(store, stub.server.URL)
 
@@ -168,7 +175,7 @@ func TestOAuthPersistsRotatedToken(t *testing.T) {
 		t.Fatalf("Valid: %v", err)
 	}
 
-	saved, err := store.LoadToken(context.Background(), "acct")
+	saved, err := store.LoadToken(context.Background(), claudeMaxProviderName, "acct")
 	if err != nil {
 		t.Fatalf("LoadToken: %v", err)
 	}
@@ -185,7 +192,7 @@ func TestOAuthPersistsRotatedToken(t *testing.T) {
 
 func TestOAuthInvalidGrantReturnsDeadError(t *testing.T) {
 	store := newFakeTokenStore()
-	store.tokens["acct"] = expiredToken("r1")
+	store.tokens[tokenKey{claudeMaxProviderName, "acct"}] = expiredToken("r1")
 	stub := newStubOAuth(t, http.StatusBadRequest, `{"error":"invalid_grant"}`, 0)
 	m := managerFor(store, stub.server.URL)
 

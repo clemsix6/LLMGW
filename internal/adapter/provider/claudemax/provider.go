@@ -18,6 +18,10 @@ import (
 	"github.com/clemsix6/LLMGW/internal/domain/usage"
 )
 
+// claudeMaxProviderName is the provider-table name for the Claude Max OAuth backend. It is passed
+// to every store call so token and account queries are scoped to this provider row.
+const claudeMaxProviderName = "claude_max"
+
 // compile-time assertion that Provider satisfies the domain port.
 var _ domain.Provider = (*Provider)(nil)
 
@@ -104,6 +108,8 @@ type Provider struct {
 
 	store accountStore // store lists the pool's accounts and persists their cooldown state.
 
+	providerName string // providerName is passed to every store call to scope queries to this provider.
+
 	httpClient *http.Client // httpClient performs the upstream request (a plain net/http client).
 
 	baseURL string // baseURL is the Anthropic API base; injectable for tests.
@@ -114,11 +120,12 @@ type Provider struct {
 // New builds a Claude Max provider over the accounts persisted in store, spoofing claudeCodeVersion.
 func New(store accountStore, claudeCodeVersion string) *Provider {
 	return &Provider{
-		tokens:     newTokenManager(store, claudeCodeVersion),
-		spoof:      spoof{version: claudeCodeVersion},
-		store:      store,
-		httpClient: &http.Client{},
-		baseURL:    defaultAnthropicBaseURL,
+		tokens:       newTokenManager(store, claudeCodeVersion, claudeMaxProviderName),
+		spoof:        spoof{version: claudeCodeVersion},
+		store:        store,
+		providerName: claudeMaxProviderName,
+		httpClient:   &http.Client{},
+		baseURL:      defaultAnthropicBaseURL,
 	}
 }
 
@@ -133,7 +140,7 @@ func (p *Provider) Send(ctx context.Context, req llm.Request, out domain.StreamS
 		return usage.Usage{}, fmt.Errorf("parse anthropic request:\n%w", err)
 	}
 
-	accounts, err := p.store.LoadAccounts(ctx)
+	accounts, err := p.store.LoadAccounts(ctx, p.providerName)
 	if err != nil {
 		return usage.Usage{}, fmt.Errorf("load accounts:\n%w", err)
 	}

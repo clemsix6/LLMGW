@@ -156,17 +156,4 @@ type Store interface {
 	// ReleaseReservation removes a previously created reservation.
 	ReleaseReservation(ctx context.Context, reservationID int64) error
 
-	// LoadToken returns the persisted OAuth token for an account label.
-	LoadToken(ctx context.Context, account string) (Token, error)
-
-	// SaveToken persists the OAuth token for an account label.
-	SaveToken(ctx context.Context, account string, t Token) error
-
-	// LoadAccounts returns every account under the provider with its cooldown state, ordered by
-	// label, so the provider pool can select a non-cooling account round-robin.
-	LoadAccounts(ctx context.Context) ([]Account, error)
-
-	// SetCooldown records that an account is rate-limited until the given time, so the provider
-	// pool skips it until then.
-	SetCooldown(ctx context.Context, account string, until time.Time) error
 }

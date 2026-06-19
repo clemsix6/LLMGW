@@ -150,7 +150,7 @@ func shutdown(server *httpserver.Server) error {
 // store's insert is idempotent (never overwriting an existing row), so this is safe on every boot.
 func seedSessionKeys(ctx context.Context, store *postgres.Store, seeds []config.SessionKey) error {
 	for _, seed := range seeds {
-		if err := store.SeedSessionKey(ctx, seed.Label, seed.Key); err != nil {
+		if err := store.SeedSessionKey(ctx, postgres.DefaultProviderName, seed.Label, seed.Key); err != nil {
 			return fmt.Errorf("seed session key %q:\n%w", seed.Label, err)
 		}
 	}
