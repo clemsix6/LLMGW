@@ -138,9 +138,20 @@ type outcome struct {
 	latencyMS int64 // latencyMS is the upstream call duration in milliseconds.
 }
 
+// recordTimeout bounds the detached usage-recording writes so a wedged database cannot leak a
+// goroutine after the client has gone.
+const recordTimeout = 5 * time.Second
+
 // record persists a usage_event. A recording failure is logged but never fails an otherwise
 // successful proxy: the upstream quota was already spent, so retrying would double-charge.
+// The usage_event is post-hoc accounting that must persist even after the client disconnects
+// (which cancels the request context), so the writes run on a context detached from request
+// cancellation with their own timeout — otherwise budget tracking silently drops every call
+// whose client closes the connection the moment it has the full response.
 func (h *handler) record(ctx context.Context, projectID int64, tag, model string, o outcome) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
+	defer cancel()
+
 	event := domain.UsageEvent{
 		Timestamp:    time.Now().UTC(),
 		ProjectID:    projectID,
