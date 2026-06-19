@@ -95,7 +95,7 @@ func (p *Provider) Send(ctx context.Context, req llm.Request, out domain.StreamS
 	}
 	defer resp.Body.Close()
 
-	return p.handleResp(resp, req.Stream(), out)
+	return p.handleResp(resp, req.Stream(), out, parseIncludeUsage(req.Bytes()))
 }
 
 // pickAccount returns the first seeded account label, the one the skeleton serves. An empty pool
@@ -163,16 +163,16 @@ type responseTool struct {
 	Parameters  json.RawMessage `json:"parameters,omitempty"`  // Parameters is the JSON Schema for function arguments.
 }
 
-// handleResp dispatches the upstream response. Non-200 → typed error; 200 → non-streaming or
-// streaming path depending on stream. The streaming path is reserved for Task 11.
-func (p *Provider) handleResp(resp *http.Response, stream bool, out domain.StreamSink) (usage.Usage, error) {
+// handleResp dispatches the upstream response. Non-200 → typed error; 200 → streaming or
+// non-streaming path depending on stream. includeUsage is forwarded to the streaming path to
+// control the optional usage-only chunk at the end of the SSE stream.
+func (p *Provider) handleResp(resp *http.Response, stream bool, out domain.StreamSink, includeUsage bool) (usage.Usage, error) {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		return usage.Usage{}, classifyUpstream(resp.StatusCode, resp.Header, body)
 	}
 	if stream {
-		// TODO: Task 11 wires the streaming translator here.
-		return usage.Usage{}, fmt.Errorf("streaming not yet implemented")
+		return relayTranslatedStream(resp.Body, out, includeUsage)
 	}
 	return handleNonStreaming(resp.Body, out)
 }
