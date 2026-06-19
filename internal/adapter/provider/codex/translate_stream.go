@@ -36,7 +36,7 @@ type chunkDelta struct {
 
 // chunkToolCallDelta is a streamed function call slot in a chunk delta.
 type chunkToolCallDelta struct {
-	Index    int            `json:"index"`          // Index is the output item index from the Responses stream.
+	Index    int            `json:"index"`          // Index is the 0-based sequential position in the tool_calls array.
 	ID       string         `json:"id,omitempty"`   // ID is set only on the introducing chunk for each call.
 	Type     string         `json:"type,omitempty"` // Type is "function"; set only on the introducing chunk.
 	Function chunkFuncDelta `json:"function"`       // Function holds the name and/or argument delta.
@@ -50,17 +50,31 @@ type chunkFuncDelta struct {
 
 // streamState holds the mutable translation state for one streaming response.
 type streamState struct {
-	id           string         // id is the Responses response id extracted from response.created.
-	model        string         // model is the model identifier extracted from response.created.
-	created      int64          // created is the Unix timestamp used for all emitted chunks.
-	hasToolCall  bool           // hasToolCall is true once any function-call item has been emitted.
-	includeUsage bool           // includeUsage controls emission of the final usage-only chunk.
-	usage        responsesUsage // usage is populated from response.completed.
+	id             string         // id is the Responses response id extracted from response.created.
+	model          string         // model is the model identifier extracted from response.created.
+	created        int64          // created is the Unix timestamp used for all emitted chunks.
+	hasToolCall    bool           // hasToolCall is true once any function-call item has been emitted.
+	includeUsage   bool           // includeUsage controls emission of the final usage-only chunk.
+	usage          responsesUsage // usage is populated from response.completed.
+	toolCallCount  int            // toolCallCount is the number of function-call items introduced so far.
+	toolCallIndex  map[int]int    // toolCallIndex maps Responses output_index to the 0-based sequential client index.
 }
 
 // toUsage converts the accumulated Responses API token counts to domain usage.
 func (s *streamState) toUsage() usage.Usage {
 	return usage.Usage{InputTokens: s.usage.InputTokens, OutputTokens: s.usage.OutputTokens}
+}
+
+// assignToolIndex registers a new function-call item identified by outputIndex and returns its
+// 0-based sequential position in the tool_calls array, incrementing the counter for subsequent calls.
+func (s *streamState) assignToolIndex(outputIndex int) int {
+	if s.toolCallIndex == nil {
+		s.toolCallIndex = make(map[int]int)
+	}
+	idx := s.toolCallCount
+	s.toolCallCount++
+	s.toolCallIndex[outputIndex] = idx
+	return idx
 }
 
 // responsesStreamEvent is the minimal shape of a Responses API SSE event, covering all
@@ -109,6 +123,7 @@ func relayTranslatedStream(upstream io.Reader, out domain.StreamSink, includeUsa
 			if err == io.EOF {
 				break
 			}
+			out.Flush()
 			return state.toUsage(), fmt.Errorf("read upstream SSE:\n%w", err)
 		}
 	}
@@ -186,7 +201,7 @@ func emitContentDelta(delta string, out domain.StreamSink, state *streamState) e
 func emitFuncItemAdded(event responsesStreamEvent, out domain.StreamSink, state *streamState) error {
 	state.hasToolCall = true
 	tc := chunkToolCallDelta{
-		Index:    event.OutputIndex,
+		Index:    state.assignToolIndex(event.OutputIndex),
 		ID:       event.Item.CallID,
 		Type:     "function",
 		Function: chunkFuncDelta{Name: event.Item.Name, Arguments: ""},
@@ -204,7 +219,7 @@ func emitFuncItemAdded(event responsesStreamEvent, out domain.StreamSink, state 
 // emitFuncArgsDelta emits a chunk carrying a function-arguments delta fragment.
 func emitFuncArgsDelta(event responsesStreamEvent, out domain.StreamSink, state *streamState) error {
 	tc := chunkToolCallDelta{
-		Index:    event.OutputIndex,
+		Index:    state.toolCallIndex[event.OutputIndex],
 		Function: chunkFuncDelta{Arguments: event.Delta},
 	}
 	chunk := completionChunk{

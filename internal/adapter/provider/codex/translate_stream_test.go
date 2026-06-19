@@ -74,7 +74,9 @@ func TestRelayTranslatedStreamUsageChunk(t *testing.T) {
 }
 
 // TestRelayTranslatedStreamFunctionCall verifies that the function-call streaming events
-// produce a tool_calls delta chunk and set finish_reason to "tool_calls".
+// produce a tool_calls delta chunk and set finish_reason to "tool_calls". The SSE fixture
+// has the function call at output_index=2 (preceded by a reasoning item and a message item),
+// so this test also asserts the emitted tool_calls index is 0-based (0, not 2).
 func TestRelayTranslatedStreamFunctionCall(t *testing.T) {
 	sink := &captureSink{}
 	if _, err := relayTranslatedStream(readTestdataReader(t, "responses_stream.sse"), sink, false); err != nil {
@@ -90,6 +92,29 @@ func TestRelayTranslatedStreamFunctionCall(t *testing.T) {
 	// Verify finish_reason is "tool_calls" (present in the final chunk).
 	if !strings.Contains(s, `"tool_calls"`) {
 		t.Fatal("expected finish_reason tool_calls")
+	}
+	// Verify the first tool call is emitted with sequential index 0, not the Responses
+	// output_index (2). An SDK that allocates a slot array by index would get wrong results
+	// if the pass-through output_index were used.
+	for _, line := range strings.Split(s, "\n") {
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "[DONE]" {
+			continue
+		}
+		var chunk completionChunk
+		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
+			continue
+		}
+		for _, choice := range chunk.Choices {
+			for _, tc := range choice.Delta.ToolCalls {
+				if tc.Function.Name == "get_weather" && tc.Index != 0 {
+					t.Fatalf("tool_calls[].index = %d, want 0 (must be 0-based sequential, not output_index)", tc.Index)
+				}
+			}
+		}
 	}
 }
 
