@@ -59,6 +59,10 @@ func run() error {
 		return err
 	}
 
+	if err := seedCodexAccounts(ctx, store, cfg.CodexAccounts); err != nil {
+		return err
+	}
+
 	claude := claudemax.New(store, cfg.ClaudeCodeVersion)
 	routes := []httpserver.Route{{
 		Path:         "/v1/messages",
@@ -158,6 +162,18 @@ func seedSessionKeys(ctx context.Context, store *postgres.Store, seeds []config.
 	for _, seed := range seeds {
 		if err := store.SeedSessionKey(ctx, postgres.DefaultProviderName, seed.Label, seed.Key); err != nil {
 			return fmt.Errorf("seed session key %q:\n%w", seed.Label, err)
+		}
+	}
+	return nil
+}
+
+// seedCodexAccounts persists the configured Codex refresh tokens and account IDs for accounts that
+// have no row yet. The store's insert is idempotent (never overwriting an existing row), so this is
+// safe on every boot.
+func seedCodexAccounts(ctx context.Context, store *postgres.Store, seeds []config.CodexAccount) error {
+	for _, seed := range seeds {
+		if err := store.SeedCodexAccount(ctx, seed.Label, seed.RefreshToken, seed.AccountID); err != nil {
+			return fmt.Errorf("seed codex account %q:\n%w", seed.Label, err)
 		}
 	}
 	return nil

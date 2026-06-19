@@ -175,6 +175,26 @@ ON CONFLICT (provider_id, account_label) DO NOTHING`
 	return nil
 }
 
+// SeedCodexAccount inserts an account's durable refresh token and ChatGPT account ID when the
+// account has no row yet under the Codex provider. It is idempotent (never overwriting an existing
+// row), keeping initial credential seeding separate from token refresh writes.
+func (s *Store) SeedCodexAccount(ctx context.Context, label, refreshToken, accountID string) error {
+	providerID, err := s.providerIDByName(ctx, CodexProviderName)
+	if err != nil {
+		return err
+	}
+
+	const query = `
+INSERT INTO oauth_token (provider_id, account_label, refresh_token, chatgpt_account_id, updated_at)
+VALUES ($1, $2, $3, $4, now())
+ON CONFLICT (provider_id, account_label) DO NOTHING`
+
+	if _, err := s.pool.Exec(ctx, query, providerID, label, refreshToken, accountID); err != nil {
+		return fmt.Errorf("seed codex account %q:\n%w", label, err)
+	}
+	return nil
+}
+
 // providerIDByName resolves the integer id of the named provider, memoising the result so each
 // provider name hits the DB at most once per Store lifetime. The mutex is held during the DB call
 // so concurrent misses for the same name serialise rather than issue duplicate queries.

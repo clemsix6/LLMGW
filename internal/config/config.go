@@ -18,6 +18,19 @@ type Config struct {
 	ClaudeCodeVersion string // ClaudeCodeVersion is the spoofed Claude Code client version.
 
 	DefaultProject string // DefaultProject is attributed to requests that omit the X-Project header; empty keeps X-Project required.
+
+	CodexAccounts []CodexAccount // CodexAccounts seeds the per-account Codex refresh tokens and account identifiers.
+
+	CodexVersion string // CodexVersion is the spoofed Codex client version sent in provider request headers.
+}
+
+// CodexAccount is a single seed Codex account bound to a label.
+type CodexAccount struct {
+	Label string // Label identifies the account (e.g. "main").
+
+	RefreshToken string // RefreshToken is the durable OAuth refresh token for the account.
+
+	AccountID string // AccountID is the ChatGPT account identifier (e.g. "acct_…").
 }
 
 // SessionKey is a single seed claude.ai session key bound to an account label.
@@ -33,6 +46,9 @@ const (
 
 	// defaultClaudeCodeVersion is the spoofed client version when LLMGW_CLAUDE_CODE_VERSION is unset.
 	defaultClaudeCodeVersion = "2.1.181"
+
+	// defaultCodexVersion is the spoofed Codex client version when LLMGW_CODEX_VERSION is unset.
+	defaultCodexVersion = "1.0.0"
 )
 
 // errMissingDSN signals that the required Postgres DSN environment variable is unset.
@@ -51,12 +67,19 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("load config:\n%w", err)
 	}
 
+	codexAccounts, err := parseCodexAccounts(os.Getenv("LLMGW_CODEX_ACCOUNTS"))
+	if err != nil {
+		return Config{}, fmt.Errorf("load config:\n%w", err)
+	}
+
 	return Config{
 		Listen:            valueOr(os.Getenv("LLMGW_LISTEN"), defaultListen),
 		PostgresDSN:       dsn,
 		SessionKeys:       keys,
 		ClaudeCodeVersion: valueOr(os.Getenv("LLMGW_CLAUDE_CODE_VERSION"), defaultClaudeCodeVersion),
 		DefaultProject:    os.Getenv("LLMGW_DEFAULT_PROJECT"),
+		CodexAccounts:     codexAccounts,
+		CodexVersion:      valueOr(os.Getenv("LLMGW_CODEX_VERSION"), defaultCodexVersion),
 	}, nil
 }
 
@@ -96,4 +119,40 @@ func parsePair(pair string) (SessionKey, error) {
 		return SessionKey{}, fmt.Errorf("invalid session key pair %q (want label=key)", pair)
 	}
 	return SessionKey{Label: label, Key: key}, nil
+}
+
+// parseCodexAccounts parses a comma-separated list of "label:refresh_token:account_id" triplets.
+// An empty input yields no accounts; a malformed triplet returns an error.
+func parseCodexAccounts(raw string) ([]CodexAccount, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	var accounts []CodexAccount
+	for _, triplet := range strings.Split(raw, ",") {
+		account, err := parseCodexTriplet(strings.TrimSpace(triplet))
+		if err != nil {
+			return nil, err
+		}
+		accounts = append(accounts, account)
+	}
+	return accounts, nil
+}
+
+// parseCodexTriplet splits a single "label:refresh_token:account_id" triplet into a CodexAccount.
+func parseCodexTriplet(triplet string) (CodexAccount, error) {
+	label, rest, ok := strings.Cut(triplet, ":")
+	label = strings.TrimSpace(label)
+	if !ok || label == "" {
+		return CodexAccount{}, fmt.Errorf("invalid codex account triplet %q (want label:refresh_token:account_id)", triplet)
+	}
+
+	refreshToken, accountID, ok := strings.Cut(rest, ":")
+	refreshToken, accountID = strings.TrimSpace(refreshToken), strings.TrimSpace(accountID)
+	if !ok || refreshToken == "" || accountID == "" {
+		return CodexAccount{}, fmt.Errorf("invalid codex account triplet %q (want label:refresh_token:account_id)", triplet)
+	}
+
+	return CodexAccount{Label: label, RefreshToken: refreshToken, AccountID: accountID}, nil
 }
