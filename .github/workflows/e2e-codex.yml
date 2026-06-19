@@ -1,0 +1,99 @@
+name: E2E Codex (real subscription)
+
+# Codex (ChatGPT-subscription) E2E against the LIVE backend.
+#
+# Unlike Anthropic's claude.ai session_key (durable, never rotates), the Codex refresh_token
+# ROTATES on every use — a static secret would die after the first run. So this workflow:
+#   1. refreshes the token ITSELF (curl) and writes the rotated refresh_token BACK to the secret
+#      immediately (gh secret set -> needs a PAT with Secrets:write in GH_SECRETS_PAT);
+#   2. seeds the FRESH access_token into the smoke, which then uses it WITHOUT rotating again
+#      (the rotation happens exactly once, in the step above, with a near-zero write-back window);
+#   3. SERIALIZES every token user (concurrency) so two runs can't rotate the same token and
+#      invalidate each other;
+#   4. runs a keepalive on a schedule so the chain never crosses the ~8-day idle expiry.
+#
+# === ONE-TIME SETUP (you must do this) ===
+# Create these repo secrets (Settings -> Secrets and variables -> Actions):
+#   LLMGW_CODEX_REFRESH_TOKEN  = jq -r .tokens.refresh_token ~/.codex/auth.json   (after `codex login`)
+#   LLMGW_CODEX_ACCOUNT_ID     = jq -r .tokens.account_id    ~/.codex/auth.json
+#   GH_SECRETS_PAT             = a fine-grained PAT for THIS repo with "Secrets: Read and write"
+# If the refresh ever fails (chain broken / >8d idle / token revoked), just re-seed
+# LLMGW_CODEX_REFRESH_TOKEN from a fresh `codex login` — that's the documented recovery.
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 4 */3 * *'   # every 3 days, < the ~8-day idle limit: keep the refresh chain alive
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # CRITICAL: serialize ALL token users (the E2E run AND the scheduled keepalive). Two concurrent
+  # refreshes would rotate the same token and one would invalidate the other -> chain broken.
+  # Never cancel an in-progress run (it may be mid-refresh/write-back).
+  group: llmgw-codex-token
+  cancel-in-progress: false
+
+jobs:
+  codex:
+    name: Refresh, write-back & E2E (real Codex)
+    runs-on: ubuntu-latest
+    env:
+      TESTCONTAINERS_RYUK_DISABLED: "true"   # ephemeral runners: the reaper is unneeded and flaky
+      CODEX_CLIENT_ID: app_EMoamEEZ73f0CkXaXp7hrann
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Preflight — require secrets
+        env:
+          REFRESH: ${{ secrets.LLMGW_CODEX_REFRESH_TOKEN }}
+          ACCOUNT: ${{ secrets.LLMGW_CODEX_ACCOUNT_ID }}
+          PAT: ${{ secrets.GH_SECRETS_PAT }}
+        run: |
+          missing=""
+          [ -z "$REFRESH" ] && missing="$missing LLMGW_CODEX_REFRESH_TOKEN"
+          [ -z "$ACCOUNT" ] && missing="$missing LLMGW_CODEX_ACCOUNT_ID"
+          [ -z "$PAT" ]     && missing="$missing GH_SECRETS_PAT"
+          if [ -n "$missing" ]; then echo "::error::missing secret(s):$missing"; exit 1; fi
+
+      - name: Refresh token + write rotated refresh back to the secret
+        env:
+          REFRESH: ${{ secrets.LLMGW_CODEX_REFRESH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_SECRETS_PAT }}   # PAT with Secrets:write — `gh secret set` uses this
+        run: |
+          set -euo pipefail
+          resp="$(curl -sS --fail-with-body -X POST https://auth.openai.com/oauth/token \
+            -H 'Content-Type: application/x-www-form-urlencoded' \
+            --data-urlencode "grant_type=refresh_token" \
+            --data-urlencode "refresh_token=${REFRESH}" \
+            --data-urlencode "client_id=${CODEX_CLIENT_ID}")" || {
+              echo "::error::OAuth token endpoint call failed (HTTP error)."; exit 1; }
+          new_refresh="$(printf '%s' "$resp" | jq -r '.refresh_token // empty')"
+          access="$(printf '%s' "$resp" | jq -r '.access_token // empty')"
+          if [ -z "$new_refresh" ] || [ -z "$access" ]; then
+            echo "::error::Codex token refresh returned no tokens — the chain is likely broken (>8d idle, revoked, or a prior run crashed mid-write-back). Re-seed LLMGW_CODEX_REFRESH_TOKEN from a fresh 'codex login'."
+            exit 1
+          fi
+          echo "::add-mask::$new_refresh"
+          echo "::add-mask::$access"
+          # WRITE-BACK FIRST — minimize the window where the rotated token isn't persisted:
+          printf '%s' "$new_refresh" | gh secret set LLMGW_CODEX_REFRESH_TOKEN
+          # Hand the fresh access token (+ rotated refresh) to the smoke via env (masked):
+          { echo "CODEX_ACCESS=$access"; echo "CODEX_REFRESH=$new_refresh"; } >> "$GITHUB_ENV"
+
+      - name: E2E smoke (skipped on schedule — keepalive only)
+        if: github.event_name != 'schedule'
+        env:
+          # The smoke seeds the fresh ACCESS token, so the gateway serves WITHOUT a second rotation.
+          LLMGW_CODEX_TEST_ACCESS_TOKEN: ${{ env.CODEX_ACCESS }}
+          LLMGW_CODEX_TEST_REFRESH_TOKEN: ${{ env.CODEX_REFRESH }}
+          LLMGW_CODEX_TEST_ACCOUNT_ID: ${{ secrets.LLMGW_CODEX_ACCOUNT_ID }}
+        run: go test ./test/e2e/ -run TestCodexGatewayReal -count=1 -v
