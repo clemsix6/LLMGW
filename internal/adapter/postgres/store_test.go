@@ -145,10 +145,7 @@ func TestTokenRoundTripScopedByProvider(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
 
-	// Seed a second provider row so providerIDByName can resolve it.
-	if _, err := store.pool.Exec(ctx, `INSERT INTO provider (name, type) VALUES ('chatgpt-codex', 'openrouter')`); err != nil {
-		t.Fatalf("seed provider: %v", err)
-	}
+	// Migration 0006 seeds the chatgpt-codex row; no manual insert needed.
 
 	want := domain.Token{RefreshToken: "rt", AccessToken: "at"}
 	if err := store.SaveToken(ctx, "chatgpt-codex", "acct", want); err != nil {

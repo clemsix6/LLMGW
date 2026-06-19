@@ -17,6 +17,9 @@ const (
 	// DefaultProviderName identifies the single Claude Max provider used in V1. The handler
 	// records it as the serving backend on every usage_event.
 	DefaultProviderName = "claude_max"
+
+	// CodexProviderName identifies the ChatGPT Codex provider seeded by migration 0006.
+	CodexProviderName = "chatgpt-codex"
 )
 
 // compile-time assertion that Store satisfies the domain port.
