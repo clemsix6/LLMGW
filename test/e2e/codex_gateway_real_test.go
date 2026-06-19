@@ -10,6 +10,7 @@ package e2e
 //
 //	export LLMGW_CODEX_TEST_REFRESH_TOKEN=...   # the account's durable OAuth refresh token
 //	export LLMGW_CODEX_TEST_ACCOUNT_ID=...      # the ChatGPT-Account-ID (acct_...)
+//	export LLMGW_CODEX_TEST_ACCESS_TOKEN=...    # optional: pre-obtained access token (skips refresh, for CI)
 //	go test ./test/e2e -run CodexGateway -v
 
 import (
@@ -35,11 +36,11 @@ const (
 // asserts a valid chat.completion response, and verifies a usage_event is recorded with
 // provider=CodexProviderName and the default tag "agentic" (no X-Tags header sent).
 func TestCodexGatewayRealNonStreaming(t *testing.T) {
-	refreshToken, accountID := codexCreds(t)
+	refreshToken, accountID, accessToken := codexCreds(t)
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
 	ctx := context.Background()
-	harness := startCodexGatewayHarness(t, ctx, refreshToken, accountID)
+	harness := startCodexGatewayHarness(t, ctx, refreshToken, accountID, accessToken)
 
 	body := postChatCompletionsWithRetry(t, ctx, harness)
 	assertPlausibleChatCompletion(t, body)
@@ -48,8 +49,9 @@ func TestCodexGatewayRealNonStreaming(t *testing.T) {
 }
 
 // startCodexGatewayHarness boots the gateway, seeds the Codex provider with the given
-// refresh token and account ID, and returns the running harness.
-func startCodexGatewayHarness(t *testing.T, ctx context.Context, refreshToken, accountID string) *Harness {
+// refresh token and account ID, and returns the running harness. When accessToken is
+// non-empty it is also seeded so the gateway serves without triggering an OAuth refresh.
+func startCodexGatewayHarness(t *testing.T, ctx context.Context, refreshToken, accountID, accessToken string) *Harness {
 	t.Helper()
 
 	harness, err := Start(ctx)
@@ -58,7 +60,7 @@ func startCodexGatewayHarness(t *testing.T, ctx context.Context, refreshToken, a
 	}
 	t.Cleanup(func() { harness.Stop(context.Background()) })
 
-	if err := harness.SeedCodex(ctx, codexTestAccount, refreshToken, accountID, testCodexVersion); err != nil {
+	if err := harness.SeedCodex(ctx, codexTestAccount, refreshToken, accountID, testCodexVersion, accessToken); err != nil {
 		t.Fatalf("seed codex: %v", err)
 	}
 	return harness
@@ -179,11 +181,11 @@ LIMIT 1`
 // asserts a valid chat.completion.chunk SSE stream: at least one chunk with choices[0].delta,
 // a terminal data: [DONE], and no Codex instructions or reasoning leaked into the output.
 func TestCodexGatewayRealStreaming(t *testing.T) {
-	refreshToken, accountID := codexCreds(t)
+	refreshToken, accountID, accessToken := codexCreds(t)
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
 	ctx := context.Background()
-	harness := startCodexGatewayHarness(t, ctx, refreshToken, accountID)
+	harness := startCodexGatewayHarness(t, ctx, refreshToken, accountID, accessToken)
 
 	raw := postCodexStreamWithRetry(t, ctx, harness)
 	assertPlausibleCodexStream(t, raw)
@@ -192,11 +194,11 @@ func TestCodexGatewayRealStreaming(t *testing.T) {
 // TestCodexGatewayRealToolCall forwards a tool-calling request through the full gateway and
 // asserts the response contains choices[0].message.tool_calls with the forced function name.
 func TestCodexGatewayRealToolCall(t *testing.T) {
-	refreshToken, accountID := codexCreds(t)
+	refreshToken, accountID, accessToken := codexCreds(t)
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
 	ctx := context.Background()
-	harness := startCodexGatewayHarness(t, ctx, refreshToken, accountID)
+	harness := startCodexGatewayHarness(t, ctx, refreshToken, accountID, accessToken)
 
 	body := postCodexToolCallWithRetry(t, ctx, harness)
 	assertToolCallResponse(t, body)

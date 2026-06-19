@@ -9,6 +9,7 @@ package e2e
 //
 //	export LLMGW_CODEX_TEST_REFRESH_TOKEN=...   # the account's durable OAuth refresh token
 //	export LLMGW_CODEX_TEST_ACCOUNT_ID=...      # the ChatGPT-Account-ID (acct_...)
+//	export LLMGW_CODEX_TEST_ACCESS_TOKEN=...    # optional: pre-obtained access token (skips refresh)
 //	go test ./test/e2e -run CodexReal -v
 
 import (
@@ -35,7 +36,7 @@ const (
 // TestCodexRealSmoke seeds a real Codex account and proves the provider reaches a 200 with
 // non-empty relayed content through the OAuth + spoof path. It skips when credentials are absent.
 func TestCodexRealSmoke(t *testing.T) {
-	refreshToken, accountID := codexCreds(t)
+	refreshToken, accountID, _ := codexCreds(t)
 
 	ctx := context.Background()
 	provider := newCodexProvider(t, ctx, refreshToken, accountID)
@@ -48,9 +49,11 @@ func TestCodexRealSmoke(t *testing.T) {
 	t.Logf("codex real 200: relayed %d bytes", len(body))
 }
 
-// codexCreds returns the seeded refresh token and account id, skipping the test when either is
-// absent. A partial pair fails loudly so a half-configured run is not silently skipped.
-func codexCreds(t *testing.T) (refreshToken, accountID string) {
+// codexCreds returns the seeded refresh token, account id, and optional access token, skipping
+// the test when the required pair is absent. A partial required pair fails loudly so a
+// half-configured run is not silently skipped. LLMGW_CODEX_TEST_ACCESS_TOKEN is optional: when
+// set the harness seeds it so the gateway uses it directly without triggering an OAuth refresh.
+func codexCreds(t *testing.T) (refreshToken, accountID, accessToken string) {
 	t.Helper()
 
 	refreshToken = os.Getenv("LLMGW_CODEX_TEST_REFRESH_TOKEN")
@@ -61,7 +64,8 @@ func codexCreds(t *testing.T) (refreshToken, accountID string) {
 	if refreshToken == "" || accountID == "" {
 		t.Fatal("both LLMGW_CODEX_TEST_REFRESH_TOKEN and LLMGW_CODEX_TEST_ACCOUNT_ID must be set")
 	}
-	return refreshToken, accountID
+	accessToken = os.Getenv("LLMGW_CODEX_TEST_ACCESS_TOKEN")
+	return refreshToken, accountID, accessToken
 }
 
 // newCodexProvider boots an ephemeral Postgres, seeds the Codex account, and builds the provider.
