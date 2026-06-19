@@ -26,21 +26,27 @@ type Server struct {
 }
 
 // New constructs a Server with its routes registered. The store backs the /v1/messages
-// passthrough (project resolution, routing, usage recording); providerName labels the
-// serving backend on every recorded usage_event; defaultProject is attributed to requests
-// that omit the X-Project header (empty keeps the header required).
-func New(store domain.Store, providerName, defaultProject string) *Server {
-	messages := &messagesHandler{store: store, providerName: providerName, defaultProject: defaultProject}
+// passthrough (project resolution, routing, usage recording); providerName labels the serving
+// backend on every recorded usage_event; defaultProject is attributed to requests that omit
+// the X-Project header (empty keeps the header required).
+// The default provider is resolved once at construction via store.DefaultRoute.
+func New(store domain.Store, providerName, defaultProject string) (*Server, error) {
+	provider, err := store.DefaultRoute(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("resolve default provider:\n%w", err)
+	}
+
+	h := newHandler(store, provider, AnthropicWire{}, providerName, defaultProject)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
-	mux.HandleFunc("POST /v1/messages", messages.handle)
+	mux.HandleFunc("POST /v1/messages", h.handle)
 
 	// Some OpenAI-wire clients (e.g. Hermes Agent) hardcode POST /chat/completions as their
 	// endpoint path even when configured for an Anthropic provider — they still send a native
 	// Anthropic Messages body. Alias that path to the same handler so those clients work with no
 	// format translation: the body is already Anthropic and auth is a no-op (local, trusted).
-	mux.HandleFunc("POST /chat/completions", messages.handle)
+	mux.HandleFunc("POST /chat/completions", h.handle)
 
 	return &Server{
 		httpServer: &http.Server{
@@ -50,7 +56,7 @@ func New(store domain.Store, providerName, defaultProject string) *Server {
 			// No WriteTimeout on purpose: a streaming (SSE) response writes for the full, unbounded
 			// duration of a generation. A WriteTimeout would abort long streams mid-flight.
 		},
-	}
+	}, nil
 }
 
 // Serve accepts connections on the given listener until the server is shut down.

@@ -74,10 +74,14 @@ func serve(ctx context.Context, cfg config.Config, store *postgres.Store) error 
 		return fmt.Errorf("listen on %s:\n%w", cfg.Listen, err)
 	}
 
+	server, err := httpserver.New(store, postgres.DefaultProviderName, cfg.DefaultProject)
+	if err != nil {
+		return fmt.Errorf("build http server:\n%w", err)
+	}
+
 	pruneCtx, stopPruner := context.WithCancel(context.Background())
 	prunerDone := startPruner(pruneCtx, store)
 
-	server := httpserver.New(store, postgres.DefaultProviderName, cfg.DefaultProject)
 	serveErr := serveAsync(server, listener)
 
 	var result error
