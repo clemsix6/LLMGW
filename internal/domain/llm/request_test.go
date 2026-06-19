@@ -279,6 +279,15 @@ func systemBlocks(t *testing.T, req ChatRequest) []any {
 	return system
 }
 
+// TestChatRequestSatisfiesRequest verifies that ChatRequest implements Request so the
+// interface is structurally complete before the port is retyped.
+func TestChatRequestSatisfiesRequest(t *testing.T) {
+	var req Request = ChatRequest{body: map[string]any{"model": "claude-x", "stream": true}}
+	if req.Model() != "claude-x" || !req.Stream() || len(req.Bytes()) == 0 {
+		t.Fatalf("ChatRequest does not satisfy Request: %q %v %d", req.Model(), req.Stream(), len(req.Bytes()))
+	}
+}
+
 // assertTextBlock asserts a system block is a text block carrying the wanted text.
 func assertTextBlock(t *testing.T, block any, wantText string) {
 	t.Helper()

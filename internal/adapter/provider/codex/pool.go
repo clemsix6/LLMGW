@@ -1,8 +1,7 @@
-package claudemax
+package codex
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"time"
 
@@ -11,44 +10,18 @@ import (
 
 const (
 	// defaultCooldown is applied on a 429 with no reset hint and on transient upstream failures
-	// (5xx / auth). Deliberately short (never clewdr's 1h) so a transient limit clears quickly and
-	// the account returns to the pool.
+	// (5xx / auth). Deliberately short so a transient limit clears quickly and the account
+	// returns to the pool.
 	defaultCooldown = 60 * time.Second
 
-	// usageExhaustedCooldown benches an account that reports "out of extra usage". Empirically this
-	// is a short throttle on the subscription's programmatic path, not a real budget exhaustion: the
-	// account serves again within ~1s. So the bench is tiny — both to retry the account quickly and
-	// to keep the all-cooling 503's Retry-After short, since clients (Hermes' SDK) honor it.
-	usageExhaustedCooldown = 5 * time.Second
-
-	// deadTokenCooldown benches an account whose credential can't be refreshed (a dead session key
-	// needing an operator re-seed); cooling it longer avoids hammering the OAuth bootstrap each Send.
+	// deadTokenCooldown benches an account whose credential can't be refreshed (a dead OAuth
+	// token needing an operator re-seed); cooling it longer avoids hammering the OAuth endpoint
+	// each Send.
 	deadTokenCooldown = 15 * time.Minute
 )
 
-// AllCoolingError reports that every account in the pool is on cooldown, so no request can be
-// served right now. After is the delay until the soonest account becomes available; the
-// handler maps it to a 503 with a Retry-After header.
-type AllCoolingError struct {
-	After time.Duration // After is the wait until the earliest account's cooldown clears.
-}
-
-// Error implements the error interface.
-func (e *AllCoolingError) Error() string {
-	return fmt.Sprintf("all accounts cooling; retry after %s", e.After)
-}
-
-// HTTPStatus returns 503 Service Unavailable; all accounts are cooling.
-func (e *AllCoolingError) HTTPStatus() int { return 503 }
-
-// ErrorType returns the stable classifier "all_cooling".
-func (e *AllCoolingError) ErrorType() string { return "all_cooling" }
-
-// RetryAfter returns the known backoff duration (always present for AllCoolingError).
-func (e *AllCoolingError) RetryAfter() (time.Duration, bool) { return e.After, true }
-
-// accountStore is the persistence the multi-account provider needs: per-account token access (for
-// the token manager) plus the cooldown state that drives round-robin selection.
+// accountStore is the persistence the multi-account pool needs: per-account token access (for
+// the token manager) plus the account roster and cooldown state that drives round-robin selection.
 type accountStore interface {
 	tokenStore
 
@@ -93,7 +66,7 @@ func cooling(account domain.Account, now time.Time) bool {
 // un-cooled) account and tries it again.
 func (p *Provider) cool(ctx context.Context, account string, until time.Time) {
 	if err := p.store.SetCooldown(ctx, p.providerName, account, until); err != nil {
-		log.Printf("llmgw: set cooldown for %q: %v", account, err)
+		log.Printf("llmgw: codex set cooldown for %q: %v", account, err)
 	}
 }
 

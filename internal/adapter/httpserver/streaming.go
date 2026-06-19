@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/clemsix6/LLMGW/internal/domain"
 	"github.com/clemsix6/LLMGW/internal/domain/llm"
 )
 
@@ -15,7 +14,7 @@ import (
 // before any byte is written (e.g. an upstream non-200), nothing is committed yet, so the SSE
 // headers are cleared and the error is mapped to an HTTP status exactly like the buffered path.
 // A failure after relaying started leaves the 200 already sent, so it only stops the relay.
-func (h *messagesHandler) sendStreaming(w http.ResponseWriter, r *http.Request, req llm.ChatRequest, projectID int64, tag string, provider domain.Provider) {
+func (h *handler) sendStreaming(w http.ResponseWriter, r *http.Request, req llm.Request, projectID int64, tag string) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeError(w, http.StatusInternalServerError, "internal", "streaming not supported by server")
@@ -26,7 +25,7 @@ func (h *messagesHandler) sendStreaming(w http.ResponseWriter, r *http.Request, 
 	sink := &streamingSink{writer: w, flusher: flusher}
 
 	start := time.Now()
-	metered, err := provider.Send(r.Context(), req, sink)
+	metered, err := h.provider.Send(r.Context(), req, sink)
 	latencyMS := time.Since(start).Milliseconds()
 
 	status := statusOK
@@ -41,7 +40,7 @@ func (h *messagesHandler) sendStreaming(w http.ResponseWriter, r *http.Request, 
 
 // finishStream maps a pre-stream failure to an HTTP error (the 200 was not committed yet) or
 // logs a mid-stream abort (the 200 is already sent, so only the relay stops).
-func (h *messagesHandler) finishStream(w http.ResponseWriter, sink *streamingSink, err error, projectID int64, tag string) {
+func (h *handler) finishStream(w http.ResponseWriter, sink *streamingSink, err error, projectID int64, tag string) {
 	if err == nil {
 		return
 	}

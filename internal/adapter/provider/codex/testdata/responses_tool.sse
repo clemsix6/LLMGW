@@ -1,0 +1,28 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_tool_test","object":"response","created_at":1000000001,"status":"in_progress","model":"gpt-5.5","output":[],"usage":null}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","response":{"id":"resp_tool_test","object":"response","status":"in_progress","model":"gpt-5.5","output":[],"usage":null}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","item":{"id":"fc_test","type":"function_call","status":"in_progress","arguments":"","call_id":"call_1","name":"get_weather"},"output_index":0}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","delta":"{\"","item_id":"fc_test","output_index":0}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","delta":"location","item_id":"fc_test","output_index":0}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","delta":"\":\"Paris\"}","item_id":"fc_test","output_index":0}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","arguments":"{\"location\":\"Paris\"}","item_id":"fc_test","output_index":0}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","item":{"id":"fc_test","type":"function_call","status":"completed","arguments":"{\"location\":\"Paris\"}","call_id":"call_1","name":"get_weather"},"output_index":0}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_tool_test","object":"response","created_at":1000000001,"status":"completed","model":"gpt-5.5","output":[],"usage":{"input_tokens":60,"output_tokens":18,"total_tokens":78}}}
+
+data: [DONE]

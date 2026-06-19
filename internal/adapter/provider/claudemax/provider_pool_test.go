@@ -123,8 +123,8 @@ func TestProviderPool(t *testing.T) {
 		if !errors.As(err, &allCooling) {
 			t.Fatalf("Send error = %v, want *AllCoolingError", err)
 		}
-		if allCooling.RetryAfter <= 0 || allCooling.RetryAfter > 3*time.Minute {
-			t.Fatalf("RetryAfter = %v, want ~2m (soonest cooldown)", allCooling.RetryAfter)
+		if allCooling.After <= 0 || allCooling.After > 3*time.Minute {
+			t.Fatalf("After = %v, want ~2m (soonest cooldown)", allCooling.After)
 		}
 
 		// A second Send must not touch the upstream: both accounts are cooling and get skipped.
@@ -436,7 +436,7 @@ func seedAccount(t *testing.T, ctx context.Context, store *postgres.Store, label
 	t.Helper()
 
 	token := domain.Token{AccessToken: accessToken, RefreshToken: "r-" + label, ExpiresAt: time.Now().Add(time.Hour)}
-	if err := store.SaveToken(ctx, label, token); err != nil {
+	if err := store.SaveToken(ctx, postgres.DefaultProviderName, label, token); err != nil {
 		t.Fatalf("seed account %q: %v", label, err)
 	}
 }
@@ -445,7 +445,7 @@ func seedAccount(t *testing.T, ctx context.Context, store *postgres.Store, label
 func loadAccounts(t *testing.T, ctx context.Context, store *postgres.Store) []domain.Account {
 	t.Helper()
 
-	accounts, err := store.LoadAccounts(ctx)
+	accounts, err := store.LoadAccounts(ctx, postgres.DefaultProviderName)
 	if err != nil {
 		t.Fatalf("load accounts: %v", err)
 	}

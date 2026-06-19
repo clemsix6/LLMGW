@@ -1,9 +1,9 @@
-package claudemax
+package codex
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,41 +17,23 @@ import (
 )
 
 const (
-	// oauthClientID is the Claude Code OAuth client identifier.
-	oauthClientID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+	// oauthClientID is the public Codex OAuth client identifier the refresh grant authenticates as.
+	// Sourced from ChatMock and corroborated by opencode-openai-codex-auth.
+	oauthClientID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
-	// anthropicVersion is the required anthropic-version header value.
-	anthropicVersion = "2023-06-01"
+	// defaultIssuerBaseURL is the base of the OpenAI OAuth issuer hosting the token endpoint.
+	defaultIssuerBaseURL = "https://auth.openai.com"
 
-	// oauthBeta is the required anthropic-beta header value for the OAuth surface.
-	oauthBeta = "oauth-2025-04-20"
-
-	// defaultAnthropicBaseURL is the base URL of the OAuth token endpoint.
-	defaultAnthropicBaseURL = "https://api.anthropic.com"
+	// tokenPath is the path of the OAuth token endpoint under the issuer.
+	tokenPath = "/oauth/token"
 
 	// refreshMargin refreshes the access token this long before it actually expires.
 	refreshMargin = 60 * time.Second
+
+	// defaultTokenTTL is the assumed access-token lifetime when neither the response nor the token
+	// itself carries an expiry, kept short so an unknown-expiry token is refreshed promptly.
+	defaultTokenTTL = time.Hour
 )
-
-// DeadRefreshTokenError signals that an account's refresh token is no longer accepted
-// (the OAuth endpoint returned invalid_grant). Recovery requires a manual re-seed.
-type DeadRefreshTokenError struct {
-	Account string // Account is the label of the account whose refresh token is dead.
-}
-
-// Error implements the error interface.
-func (e *DeadRefreshTokenError) Error() string {
-	return fmt.Sprintf("refresh token for account %q is dead (invalid_grant); re-seed required", e.Account)
-}
-
-// HTTPStatus returns 502 Bad Gateway; the upstream credential is dead.
-func (e *DeadRefreshTokenError) HTTPStatus() int { return 502 }
-
-// ErrorType returns the stable classifier "dead_refresh_token".
-func (e *DeadRefreshTokenError) ErrorType() string { return "dead_refresh_token" }
-
-// RetryAfter returns (0, false); no retry hint applies for a dead token.
-func (e *DeadRefreshTokenError) RetryAfter() (time.Duration, bool) { return 0, false }
 
 // tokenStore is the subset of the persistence port the token manager needs.
 type tokenStore interface {
@@ -62,46 +44,51 @@ type tokenStore interface {
 	SaveToken(ctx context.Context, providerName, account string, t domain.Token) error
 }
 
-// tokenManager hands out valid OAuth access tokens, refreshing expired ones. Refreshes are
-// single-flight per account and the rotated token is persisted before it is returned.
+// tokenManager hands out valid OAuth access tokens (and the per-account ChatGPT account id),
+// refreshing expired ones. Refreshes are single-flight per account and the rotated token is
+// persisted before it is returned. Unlike claudemax there is no session-key bootstrap: Codex
+// accounts are seeded directly with a refresh token and account id.
 type tokenManager struct {
 	store tokenStore // store persists tokens so rotation survives restarts.
 
-	providerName string // providerName is passed to every store call to scope it to the correct provider.
+	providerName string // providerName scopes every store call to the Codex provider.
 
 	httpClient *http.Client // httpClient performs the refresh request.
 
-	baseURL string // baseURL is the OAuth endpoint base; injectable for tests.
-
-	claudeCodeVersion string // claudeCodeVersion is the spoofed client version the session-key bootstrap sends.
+	baseURL string // baseURL is the OAuth issuer base; injectable for tests.
 
 	group singleflight.Group // group coalesces concurrent refreshes per account.
 }
 
-// newTokenManager builds a token manager backed by store, scoped to providerName, and pointing
-// at the real OAuth endpoint.
-func newTokenManager(store tokenStore, claudeCodeVersion, providerName string) *tokenManager {
+// newTokenManager builds a token manager backed by store, scoped to providerName, pointing at the
+// real OpenAI OAuth issuer.
+func newTokenManager(store tokenStore, providerName string) *tokenManager {
 	return &tokenManager{
-		store:             store,
-		providerName:      providerName,
-		httpClient:        &http.Client{Timeout: 30 * time.Second},
-		baseURL:           defaultAnthropicBaseURL,
-		claudeCodeVersion: claudeCodeVersion,
+		store:        store,
+		providerName: providerName,
+		httpClient:   &http.Client{Timeout: 30 * time.Second},
+		baseURL:      defaultIssuerBaseURL,
 	}
 }
 
-// Valid returns a non-expired access token for the account, refreshing it if needed.
-func (m *tokenManager) Valid(ctx context.Context, account string) (string, error) {
+// Valid returns a non-expired access token and the account's durable ChatGPT account id,
+// refreshing the access token when needed. The account id is seeded once and never rotates, so it
+// is always read from the stored token rather than the refresh response.
+func (m *tokenManager) Valid(ctx context.Context, account string) (accessToken, accountID string, err error) {
 	token, err := m.store.LoadToken(ctx, m.providerName, account)
 	if err != nil {
-		return "", fmt.Errorf("load token for %q:\n%w", account, err)
+		return "", "", fmt.Errorf("load token for %q:\n%w", account, err)
 	}
 
 	if fresh(token) {
-		return token.AccessToken, nil
+		return token.AccessToken, token.ChatGPTAccountID, nil
 	}
 
-	return m.refresh(ctx, account)
+	refreshed, err := m.refresh(ctx, account)
+	if err != nil {
+		return "", "", err
+	}
+	return refreshed, token.ChatGPTAccountID, nil
 }
 
 // fresh reports whether the access token is present and outside the refresh margin of expiry.
@@ -123,8 +110,9 @@ func (m *tokenManager) refresh(ctx context.Context, account string) (string, err
 	return result.(string), nil
 }
 
-// doRefresh exchanges the stored refresh token, persists the rotated token, then returns the
-// fresh access token. The rotated token is committed before use for crash-safety.
+// doRefresh exchanges the stored refresh token, persists the rotated token (preserving the seeded
+// account id), then returns the fresh access token. The rotated token is committed before use for
+// crash-safety. A missing refresh token means the account was never seeded.
 func (m *tokenManager) doRefresh(ctx context.Context, account string) (string, error) {
 	current, err := m.store.LoadToken(ctx, m.providerName, account)
 	if err != nil {
@@ -135,44 +123,21 @@ func (m *tokenManager) doRefresh(ctx context.Context, account string) (string, e
 	if fresh(current) {
 		return current.AccessToken, nil
 	}
-
-	// No refresh token yet (freshly seeded account): bootstrap from the session key.
 	if current.RefreshToken == "" {
-		return m.bootstrapAndSave(ctx, account, current.SessionKey)
+		return "", &DeadRefreshTokenError{Account: account}
 	}
 
 	refreshed, err := m.exchange(ctx, account, current.RefreshToken)
 	if err != nil {
-		var dead *DeadRefreshTokenError
-		if errors.As(err, &dead) && current.SessionKey != "" {
-			return m.bootstrapAndSave(ctx, account, current.SessionKey) // self-heal from the session key
-		}
 		return "", err
 	}
 
+	// SaveToken's UPSERT writes only access_token/refresh_token/expires_at; the account id is
+	// seed-owned and preserved by the targeted UPDATE, so no assignment is needed here.
 	if err := m.store.SaveToken(ctx, m.providerName, account, refreshed); err != nil {
 		return "", fmt.Errorf("persist rotated token for %q:\n%w", account, err)
 	}
 	return refreshed.AccessToken, nil
-}
-
-// bootstrapAndSave mints a fresh OAuth token set from the account's session key and persists it.
-// An empty session key means the account has no recoverable credential, surfaced as a dead-token
-// error so the operator re-seeds it.
-func (m *tokenManager) bootstrapAndSave(ctx context.Context, account, sessionKey string) (string, error) {
-	if sessionKey == "" {
-		return "", &DeadRefreshTokenError{Account: account}
-	}
-
-	token, err := bootstrapFromSession(ctx, m.httpClient, m.baseURL, m.claudeCodeVersion, sessionKey)
-	if err != nil {
-		return "", err
-	}
-
-	if err := m.store.SaveToken(ctx, m.providerName, account, token); err != nil {
-		return "", fmt.Errorf("persist bootstrapped token for %q:\n%w", account, err)
-	}
-	return token.AccessToken, nil
 }
 
 // exchange calls the OAuth token endpoint to swap a refresh token for a fresh token set.
@@ -204,27 +169,27 @@ func (m *tokenManager) buildRequest(ctx context.Context, refreshToken string) (*
 		"client_id":     {oauthClientID},
 	}
 
-	endpoint := m.baseURL + "/v1/oauth/token"
+	endpoint := m.baseURL + tokenPath
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("build oauth request:\n%w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("anthropic-version", anthropicVersion)
-	req.Header.Set("anthropic-beta", oauthBeta)
 	return req, nil
 }
 
-// tokenResponse is the JSON body of a successful OAuth token exchange.
+// tokenResponse is the JSON body of a successful OAuth token exchange. The Codex refresh response
+// rotates the refresh token and returns a JWT access token whose exp claim drives expiry.
 type tokenResponse struct {
-	AccessToken  string `json:"access_token"`  // AccessToken is the new bearer token.
+	AccessToken  string `json:"access_token"`  // AccessToken is the new bearer token (a JWT).
 	RefreshToken string `json:"refresh_token"` // RefreshToken is the rotated refresh credential.
-	ExpiresIn    int    `json:"expires_in"`    // ExpiresIn is the access token lifetime in seconds.
+	ExpiresIn    int    `json:"expires_in"`    // ExpiresIn is the access token lifetime in seconds, when provided.
 }
 
 // parseExchange turns the OAuth endpoint response into a Token, mapping invalid_grant to a
-// DeadRefreshTokenError and other non-2xx responses to a generic error.
+// DeadRefreshTokenError and other non-2xx responses to a generic error. A rotated refresh token
+// may be absent, in which case the prior one is kept by the caller's stored value semantics.
 func parseExchange(account string, status int, body []byte) (domain.Token, error) {
 	if status != http.StatusOK {
 		if isInvalidGrant(body) {
@@ -241,7 +206,7 @@ func parseExchange(account string, status int, body []byte) (domain.Token, error
 	return domain.Token{
 		AccessToken:  parsed.AccessToken,
 		RefreshToken: parsed.RefreshToken,
-		ExpiresAt:    time.Now().Add(time.Duration(parsed.ExpiresIn) * time.Second),
+		ExpiresAt:    expiresAtFor(parsed.AccessToken, parsed.ExpiresIn),
 	}, nil
 }
 
@@ -254,4 +219,38 @@ func isInvalidGrant(body []byte) bool {
 		return false
 	}
 	return parsed.Error == "invalid_grant"
+}
+
+// expiresAtFor derives the access token's expiry, preferring the JWT exp claim (authoritative for
+// the Codex access token), then the OAuth expires_in, then a conservative default.
+func expiresAtFor(accessToken string, expiresIn int) time.Time {
+	if exp, ok := jwtExpiry(accessToken); ok {
+		return exp
+	}
+	if expiresIn > 0 {
+		return time.Now().Add(time.Duration(expiresIn) * time.Second)
+	}
+	return time.Now().Add(defaultTokenTTL)
+}
+
+// jwtExpiry decodes the exp claim from a JWT access token, reporting false when the token is not a
+// decodable JWT or carries no exp.
+func jwtExpiry(token string) (time.Time, bool) {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return time.Time{}, false
+	}
+
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Exp == 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(claims.Exp, 0), true
 }

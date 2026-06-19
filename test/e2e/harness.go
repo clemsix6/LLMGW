@@ -3,9 +3,12 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/testcontainers/testcontainers-go"
@@ -15,6 +18,7 @@ import (
 	"github.com/clemsix6/LLMGW/internal/adapter/httpserver"
 	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
 	"github.com/clemsix6/LLMGW/internal/adapter/provider/claudemax"
+	"github.com/clemsix6/LLMGW/internal/adapter/provider/codex"
 	"github.com/clemsix6/LLMGW/internal/domain"
 )
 
@@ -33,7 +37,8 @@ type Harness struct {
 	container *tcpostgres.PostgresContainer // container is the ephemeral Postgres instance.
 }
 
-// Start launches Postgres, applies migrations, and boots the gateway on a random port.
+// Start launches Postgres, applies migrations, and boots the gateway on a random port with
+// no LLM routes registered (only GET /health). Call SeedClaudeMax to register /v1/messages.
 func Start(ctx context.Context) (*Harness, error) {
 	container, dsn, err := startPostgres(ctx)
 	if err != nil {
@@ -53,7 +58,7 @@ func Start(ctx context.Context) (*Harness, error) {
 		return nil, fmt.Errorf("listen:\n%w", err)
 	}
 
-	server := httpserver.New(store, postgres.DefaultProviderName, "")
+	server := httpserver.New(store, "", nil)
 	go func() { _ = server.Serve(listener) }()
 
 	return &Harness{
@@ -90,17 +95,114 @@ func startPostgres(ctx context.Context) (*tcpostgres.PostgresContainer, string, 
 	return container, dsn, nil
 }
 
-// SeedClaudeMax persists the account's OAuth token and wires the Claude Max provider so the
-// gateway can forward to the real Anthropic API. It must be called before issuing any
-// /v1/messages request (the handler resolves the provider lazily, per request). The token carries
-// the shared access token (refreshed once per run by the coordinator), so the provider serves it
-// directly without triggering a per-test refresh of the single-use refresh token.
+// SeedClaudeMax persists the account's OAuth token and rebuilds the server with the Claude Max
+// route wired to /v1/messages. It replaces the no-route server started by Start, so the gateway
+// can forward to the real Anthropic API. The token carries the shared access token (refreshed
+// once per run by the coordinator), so the provider serves it directly without triggering a
+// per-test refresh of the single-use refresh token.
 func (h *Harness) SeedClaudeMax(ctx context.Context, account string, token domain.Token, version string) error {
-	if err := h.store.SaveToken(ctx, account, token); err != nil {
+	if err := h.store.SaveToken(ctx, postgres.DefaultProviderName, account, token); err != nil {
 		return fmt.Errorf("seed token:\n%w", err)
 	}
-	h.store.SetDefaultProvider(claudemax.New(h.store, version))
+
+	// Shut down the no-route server; this closes the old listener.
+	if err := h.server.Shutdown(ctx); err != nil {
+		return fmt.Errorf("shutdown old server:\n%w", err)
+	}
+
+	// Open a new listener on a fresh random port.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("rebind listener:\n%w", err)
+	}
+	h.listener = listener
+	h.BaseURL = "http://" + listener.Addr().String()
+
+	claude := claudemax.New(h.store, version)
+	routes := []httpserver.Route{{
+		Path:         "/v1/messages",
+		Provider:     claude,
+		Wire:         httpserver.AnthropicWire{},
+		ProviderName: postgres.DefaultProviderName,
+	}}
+	h.server = httpserver.New(h.store, "", routes)
+	go func() { _ = h.server.Serve(h.listener) }()
 	return nil
+}
+
+// SeedCodex persists the Codex account credentials and rebuilds the server with the
+// /v1/chat/completions route wired to the codex provider. It replaces the no-route (or
+// previous) server started by Start, so the gateway can forward to the real Codex backend.
+// When accessToken is non-empty it is also stored so the token manager uses it directly
+// without performing an OAuth refresh on the first request.
+func (h *Harness) SeedCodex(ctx context.Context, account, refreshToken, accountID, version, accessToken string) error {
+	if err := h.store.SeedCodexAccount(ctx, account, refreshToken, accountID); err != nil {
+		return fmt.Errorf("seed codex account:\n%w", err)
+	}
+
+	if accessToken != "" {
+		if err := h.seedCodexAccessToken(ctx, account, refreshToken, accessToken); err != nil {
+			return fmt.Errorf("seed access token:\n%w", err)
+		}
+	}
+
+	if err := h.server.Shutdown(ctx); err != nil {
+		return fmt.Errorf("shutdown old server:\n%w", err)
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("rebind listener:\n%w", err)
+	}
+	h.listener = listener
+	h.BaseURL = "http://" + listener.Addr().String()
+
+	codexProv := codex.New(h.store, version)
+	routes := []httpserver.Route{{
+		Path:         "/v1/chat/completions",
+		Provider:     codexProv,
+		Wire:         httpserver.OpenAIWire{},
+		ProviderName: postgres.CodexProviderName,
+	}}
+	h.server = httpserver.New(h.store, "", routes)
+	go func() { _ = h.server.Serve(h.listener) }()
+	return nil
+}
+
+// seedCodexAccessToken stores a pre-obtained access token for the Codex account so the gateway's
+// token manager uses it directly without performing an OAuth refresh on the first request.
+func (h *Harness) seedCodexAccessToken(ctx context.Context, account, refreshToken, accessToken string) error {
+	tok := domain.Token{
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		ExpiresAt:    accessTokenExpiry(accessToken),
+	}
+	if err := h.store.SaveToken(ctx, postgres.CodexProviderName, account, tok); err != nil {
+		return fmt.Errorf("save access token:\n%w", err)
+	}
+	return nil
+}
+
+// accessTokenExpiry extracts the exp claim from a JWT access token and returns the expiry time.
+// On any decode failure (malformed token, missing claim, zero exp) it returns now+30 minutes as a
+// safe floor — access tokens live hours, so 30 min avoids an immediate refresh while protecting
+// against a stale token expiring silently.
+func accessTokenExpiry(token string) time.Time {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return time.Now().Add(30 * time.Minute)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return time.Now().Add(30 * time.Minute)
+	}
+	var claims struct {
+		Exp int64 `json:"exp"` // Exp is the UNIX timestamp at which the token expires.
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Exp == 0 {
+		return time.Now().Add(30 * time.Minute)
+	}
+	return time.Unix(claims.Exp, 0)
 }
 
 // Post issues a single POST against the gateway with the given body and headers. Retries are

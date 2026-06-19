@@ -20,27 +20,36 @@ const (
 	idleTimeout = 120 * time.Second
 )
 
+// Route describes a single LLM gateway endpoint: the HTTP path to register, the upstream
+// provider to forward to, the Wire that parses request bodies for this protocol, and the
+// provider name label written to every usage_event.
+type Route struct {
+	Path string // Path is the HTTP path pattern (e.g. "/v1/messages").
+
+	Provider domain.Provider // Provider is the upstream LLM backend for this route.
+
+	Wire Wire // Wire parses request bodies and supplies the default budget tag.
+
+	ProviderName string // ProviderName labels the backend on every recorded usage_event.
+}
+
 // Server is the gateway's HTTP surface.
 type Server struct {
 	httpServer *http.Server // httpServer is the underlying stdlib server.
 }
 
-// New constructs a Server with its routes registered. The store backs the /v1/messages
-// passthrough (project resolution, routing, usage recording); providerName labels the
-// serving backend on every recorded usage_event; defaultProject is attributed to requests
-// that omit the X-Project header (empty keeps the header required).
-func New(store domain.Store, providerName, defaultProject string) *Server {
-	messages := &messagesHandler{store: store, providerName: providerName, defaultProject: defaultProject}
-
+// New constructs a Server with its routes registered. For each Route in routes, a POST handler
+// is registered at Route.Path. The store backs project resolution, usage recording, and budget
+// enforcement; defaultProject is attributed to requests that omit the X-Project header (empty
+// keeps the header required).
+func New(store domain.Store, defaultProject string, routes []Route) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
-	mux.HandleFunc("POST /v1/messages", messages.handle)
 
-	// Some OpenAI-wire clients (e.g. Hermes Agent) hardcode POST /chat/completions as their
-	// endpoint path even when configured for an Anthropic provider — they still send a native
-	// Anthropic Messages body. Alias that path to the same handler so those clients work with no
-	// format translation: the body is already Anthropic and auth is a no-op (local, trusted).
-	mux.HandleFunc("POST /chat/completions", messages.handle)
+	for _, rt := range routes {
+		h := newHandler(store, rt.Provider, rt.Wire, rt.ProviderName, defaultProject)
+		mux.HandleFunc("POST "+rt.Path, h.handle)
+	}
 
 	return &Server{
 		httpServer: &http.Server{

@@ -10,11 +10,11 @@ import (
 	"github.com/clemsix6/LLMGW/internal/domain"
 )
 
-// LoadAccounts returns every account under the default provider with its cooldown state, ordered
+// LoadAccounts returns every account under the named provider with its cooldown state, ordered
 // by label so the provider pool selects accounts in a stable round-robin order. A NULL
 // cooldown_until (never rate-limited) maps to the zero time.
-func (s *Store) LoadAccounts(ctx context.Context) ([]domain.Account, error) {
-	providerID, err := s.defaultProviderID(ctx)
+func (s *Store) LoadAccounts(ctx context.Context, providerName string) ([]domain.Account, error) {
+	providerID, err := s.providerIDByName(ctx, providerName)
 	if err != nil {
 		return nil, err
 	}
@@ -57,10 +57,11 @@ func scanAccounts(rows pgx.Rows) ([]domain.Account, error) {
 	return accounts, nil
 }
 
-// SetCooldown records that an account is rate-limited until the given time. It updates only the
-// cooldown column; the OAuth token columns are owned by the refresh path.
-func (s *Store) SetCooldown(ctx context.Context, account string, until time.Time) error {
-	providerID, err := s.defaultProviderID(ctx)
+// SetCooldown records that an account is rate-limited until the given time under the named
+// provider. It updates only the cooldown column; the OAuth token columns are owned by the refresh
+// path.
+func (s *Store) SetCooldown(ctx context.Context, providerName, account string, until time.Time) error {
+	providerID, err := s.providerIDByName(ctx, providerName)
 	if err != nil {
 		return err
 	}

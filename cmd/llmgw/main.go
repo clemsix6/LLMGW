@@ -13,6 +13,7 @@ import (
 	"github.com/clemsix6/LLMGW/internal/adapter/httpserver"
 	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
 	"github.com/clemsix6/LLMGW/internal/adapter/provider/claudemax"
+	"github.com/clemsix6/LLMGW/internal/adapter/provider/codex"
 	"github.com/clemsix6/LLMGW/internal/config"
 )
 
@@ -34,8 +35,8 @@ func main() {
 	}
 }
 
-// run loads configuration, opens the store (applying migrations), wires the provider, and serves
-// HTTP until a shutdown signal arrives.
+// run loads configuration, opens the store (applying migrations), builds the route table, and
+// serves HTTP until a shutdown signal arrives.
 func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -59,25 +60,44 @@ func run() error {
 		return err
 	}
 
-	provider := claudemax.New(store, cfg.ClaudeCodeVersion)
-	store.SetDefaultProvider(provider)
+	if err := seedCodexAccounts(ctx, store, cfg.CodexAccounts); err != nil {
+		return err
+	}
 
-	return serve(ctx, cfg, store)
+	claude := claudemax.New(store, cfg.ClaudeCodeVersion)
+	codexProv := codex.New(store, cfg.CodexVersion)
+	routes := []httpserver.Route{
+		{
+			Path:         "/v1/messages",
+			Provider:     claude,
+			Wire:         httpserver.AnthropicWire{},
+			ProviderName: postgres.DefaultProviderName,
+		},
+		{
+			Path:         "/v1/chat/completions",
+			Provider:     codexProv,
+			Wire:         httpserver.OpenAIWire{},
+			ProviderName: postgres.CodexProviderName,
+		},
+	}
+
+	return serve(ctx, cfg, store, routes)
 }
 
-// serve binds the listener, starts the background pruner, runs the HTTP server, and on a shutdown
-// signal drains connections gracefully. It always stops the pruner and waits for it to finish
-// before returning, so no prune query races the deferred pool close.
-func serve(ctx context.Context, cfg config.Config, store *postgres.Store) error {
+// serve binds the listener, starts the background pruner, runs the HTTP server, and registers the
+// supplied routes. On a shutdown signal it drains connections gracefully. It always stops the pruner
+// and waits for it to finish before returning, so no prune query races the deferred pool close.
+func serve(ctx context.Context, cfg config.Config, store *postgres.Store, routes []httpserver.Route) error {
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("listen on %s:\n%w", cfg.Listen, err)
 	}
 
+	server := httpserver.New(store, cfg.DefaultProject, routes)
+
 	pruneCtx, stopPruner := context.WithCancel(context.Background())
 	prunerDone := startPruner(pruneCtx, store)
 
-	server := httpserver.New(store, postgres.DefaultProviderName, cfg.DefaultProject)
 	serveErr := serveAsync(server, listener)
 
 	var result error
@@ -150,8 +170,20 @@ func shutdown(server *httpserver.Server) error {
 // store's insert is idempotent (never overwriting an existing row), so this is safe on every boot.
 func seedSessionKeys(ctx context.Context, store *postgres.Store, seeds []config.SessionKey) error {
 	for _, seed := range seeds {
-		if err := store.SeedSessionKey(ctx, seed.Label, seed.Key); err != nil {
+		if err := store.SeedSessionKey(ctx, postgres.DefaultProviderName, seed.Label, seed.Key); err != nil {
 			return fmt.Errorf("seed session key %q:\n%w", seed.Label, err)
+		}
+	}
+	return nil
+}
+
+// seedCodexAccounts persists the configured Codex refresh tokens and account IDs for accounts that
+// have no row yet. The store's insert is idempotent (never overwriting an existing row), so this is
+// safe on every boot.
+func seedCodexAccounts(ctx context.Context, store *postgres.Store, seeds []config.CodexAccount) error {
+	for _, seed := range seeds {
+		if err := store.SeedCodexAccount(ctx, seed.Label, seed.RefreshToken, seed.AccountID); err != nil {
+			return fmt.Errorf("seed codex account %q:\n%w", seed.Label, err)
 		}
 	}
 	return nil

@@ -99,6 +99,8 @@ type Token struct {
 
 	SessionKey string // SessionKey is the durable claude.ai cookie that bootstraps OAuth tokens; empty when seeded directly with a refresh token.
 
+	ChatGPTAccountID string // ChatGPTAccountID is the ChatGPT account id the Codex provider sends per request; empty for providers that do not use it.
+
 	ExpiresAt time.Time // ExpiresAt is when AccessToken stops being valid.
 }
 
@@ -123,9 +125,8 @@ type StreamSink interface {
 
 // Provider forwards a request to an upstream LLM backend.
 type Provider interface {
-	// Send forwards req upstream. For non-streaming it writes the JSON body to out and
-	// returns the Usage; for streaming it relays SSE to out while accumulating Usage.
-	Send(ctx context.Context, req llm.ChatRequest, out StreamSink) (usage.Usage, error)
+	// Send forwards req upstream, writing the response to out and returning the Usage.
+	Send(ctx context.Context, req llm.Request, out StreamSink) (usage.Usage, error)
 }
 
 // Store is the persistence port: configuration, usage counters, reservations, and tokens.
@@ -138,9 +139,6 @@ type Store interface {
 
 	// PriceFor returns the notional per-million-token input/output USD prices for a model.
 	PriceFor(ctx context.Context, model string) (in, out float64, ok bool, err error)
-
-	// DefaultRoute resolves the provider serving requests in V1 (the single default route).
-	DefaultRoute(ctx context.Context) (Provider, error)
 
 	// RecordUsage persists a completed call as a usage_event row.
 	RecordUsage(ctx context.Context, e UsageEvent) error
@@ -156,18 +154,4 @@ type Store interface {
 
 	// ReleaseReservation removes a previously created reservation.
 	ReleaseReservation(ctx context.Context, reservationID int64) error
-
-	// LoadToken returns the persisted OAuth token for an account label.
-	LoadToken(ctx context.Context, account string) (Token, error)
-
-	// SaveToken persists the OAuth token for an account label.
-	SaveToken(ctx context.Context, account string, t Token) error
-
-	// LoadAccounts returns every account under the provider with its cooldown state, ordered by
-	// label, so the provider pool can select a non-cooling account round-robin.
-	LoadAccounts(ctx context.Context) ([]Account, error)
-
-	// SetCooldown records that an account is rate-limited until the given time, so the provider
-	// pool skips it until then.
-	SetCooldown(ctx context.Context, account string, until time.Time) error
 }

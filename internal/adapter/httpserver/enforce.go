@@ -35,7 +35,7 @@ const (
 // true when the request may proceed (the id is 0 when no limits are configured and no reservation
 // was taken), or writes a 402/5xx and returns false. The caller releases a non-zero reservation
 // after forwarding.
-func (h *messagesHandler) admit(w http.ResponseWriter, r *http.Request, req llm.ChatRequest, project string, projectID int64, tag string) (int64, bool) {
+func (h *handler) admit(w http.ResponseWriter, r *http.Request, req llm.Request, project string, projectID int64, tag string) (int64, bool) {
 	ctx := r.Context()
 
 	limits, err := h.store.LimitsFor(ctx, projectID, tag)
@@ -57,7 +57,7 @@ func (h *messagesHandler) admit(w http.ResponseWriter, r *http.Request, req llm.
 // blockUnknownModel fails closed: when a cost_usd limit applies but the model has no price row,
 // the cost cannot be computed, so the request is blocked with a 402. Calls and tokens limits are
 // unaffected by an unpriced model. It returns true when it wrote a response (block or error).
-func (h *messagesHandler) blockUnknownModel(ctx context.Context, w http.ResponseWriter, limits []domain.BudgetLimit, project, tag, model string) bool {
+func (h *handler) blockUnknownModel(ctx context.Context, w http.ResponseWriter, limits []domain.BudgetLimit, project, tag, model string) bool {
 	costLimit, hasCostLimit := firstCostLimit(limits)
 	if !hasCostLimit {
 		return false
@@ -79,7 +79,7 @@ func (h *messagesHandler) blockUnknownModel(ctx context.Context, w http.Response
 // reserveOrBlock runs the atomic admission: it groups the limits by window and tag scope, gathers
 // each group's totals under the per-(project, tag) lock, and reserves a call only if no block
 // limit is breached. On a block it writes the typed 402; on a store failure a 500.
-func (h *messagesHandler) reserveOrBlock(ctx context.Context, w http.ResponseWriter, limits []domain.BudgetLimit, project string, projectID int64, tag string) (int64, bool) {
+func (h *handler) reserveOrBlock(ctx context.Context, w http.ResponseWriter, limits []domain.BudgetLimit, project string, projectID int64, tag string) (int64, bool) {
 	groups := groupLimits(limits, tag, time.Now().UTC())
 
 	var decision budget.Decision
@@ -106,7 +106,7 @@ func (h *messagesHandler) reserveOrBlock(ctx context.Context, w http.ResponseWri
 // release removes an in-flight reservation after a call. It uses a detached context so the
 // reservation is freed even when the request context was cancelled (e.g. a streaming client
 // disconnect); a failure is logged but harmless (the TTL reaps the row anyway).
-func (h *messagesHandler) release(reservationID int64) {
+func (h *handler) release(reservationID int64) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

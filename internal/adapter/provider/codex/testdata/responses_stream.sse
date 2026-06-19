@@ -1,0 +1,43 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_abc123","object":"response","status":"in_progress","model":"gpt-5","instructions":"CODEX_SECRET_INSTRUCTIONS_MUST_NOT_LEAK"}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","response":{"id":"resp_abc123","object":"response","status":"in_progress","model":"gpt-5","instructions":"CODEX_SECRET_INSTRUCTIONS_MUST_NOT_LEAK"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"reasoning","id":"rs_001"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_001","summary":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":1,"item":{"type":"message","id":"msg_001","role":"assistant"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_001","output_index":1,"content_index":0,"delta":"The weather in "}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_001","output_index":1,"content_index":0,"delta":"San Francisco is 68°F and sunny."}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","item_id":"msg_001","output_index":1,"content_index":0,"text":"The weather in San Francisco is 68°F and sunny."}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_001"}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","id":"fc_001","call_id":"call_abc","name":"get_weather","arguments":"","status":"in_progress"}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","item_id":"fc_001","output_index":2,"call_id":"call_abc","delta":"{\"location\": \"San Francisco\", \"unit\": \"fahrenheit\"}"}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","item_id":"fc_001","output_index":2,"call_id":"call_abc","arguments":"{\"location\": \"San Francisco\", \"unit\": \"fahrenheit\"}"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":2,"item":{"type":"function_call","id":"fc_001","call_id":"call_abc","name":"get_weather","arguments":"{\"location\": \"San Francisco\", \"unit\": \"fahrenheit\"}"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_abc123","object":"response","status":"completed","model":"gpt-5","output":[],"usage":{"input_tokens":42,"output_tokens":87,"total_tokens":129}}}
+
+data: [DONE]

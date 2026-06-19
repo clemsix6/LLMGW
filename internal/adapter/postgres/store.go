@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -17,8 +18,8 @@ const (
 	// records it as the serving backend on every usage_event.
 	DefaultProviderName = "claude_max"
 
-	// defaultProviderType is the backend type of the V1 Claude Max OAuth provider.
-	defaultProviderType = "claude_max_oauth"
+	// CodexProviderName identifies the ChatGPT Codex provider seeded by migration 0006.
+	CodexProviderName = "chatgpt-codex"
 )
 
 // compile-time assertion that Store satisfies the domain port.
@@ -28,21 +29,8 @@ var _ domain.Store = (*Store)(nil)
 type Store struct {
 	pool *pgxpool.Pool // pool is the connection pool to the state database.
 
-	provider domain.Provider // provider is the backend the single V1 default route resolves to.
-}
-
-// SetDefaultProvider registers the provider returned by DefaultRoute. It is wired once at
-// startup by the composition root, before the server begins serving.
-func (s *Store) SetDefaultProvider(p domain.Provider) {
-	s.provider = p
-}
-
-// DefaultRoute resolves the provider serving every request in V1 (a single default route).
-func (s *Store) DefaultRoute(_ context.Context) (domain.Provider, error) {
-	if s.provider == nil {
-		return nil, errors.New("no default provider registered")
-	}
-	return s.provider, nil
+	providerIDMu    sync.Mutex       // providerIDMu guards providerIDCache.
+	providerIDCache map[string]int64 // providerIDCache memoises provider name → id lookups so each name hits the DB at most once.
 }
 
 // New opens a connection pool to dsn and applies any pending schema migrations.
@@ -57,7 +45,7 @@ func New(ctx context.Context, dsn string) (*Store, error) {
 		return nil, fmt.Errorf("apply migrations:\n%w", err)
 	}
 
-	return &Store{pool: pool}, nil
+	return &Store{pool: pool, providerIDCache: make(map[string]int64)}, nil
 }
 
 // Ping verifies connectivity to the database.
@@ -103,24 +91,24 @@ func (s *Store) PriceFor(ctx context.Context, model string) (in, out float64, ok
 	return in, out, true, nil
 }
 
-// LoadToken returns the persisted OAuth token for an account label under the default provider.
+// LoadToken returns the persisted OAuth token for an account label under the named provider.
 // It returns domain.ErrTokenNotFound when no row exists for the account.
-func (s *Store) LoadToken(ctx context.Context, account string) (domain.Token, error) {
-	providerID, err := s.defaultProviderID(ctx)
+func (s *Store) LoadToken(ctx context.Context, providerName, account string) (domain.Token, error) {
+	providerID, err := s.providerIDByName(ctx, providerName)
 	if err != nil {
 		return domain.Token{}, err
 	}
 
 	const query = `
-SELECT access_token, refresh_token, session_key, expires_at
+SELECT access_token, refresh_token, session_key, chatgpt_account_id, expires_at
 FROM oauth_token
 WHERE provider_id = $1 AND account_label = $2`
 
 	var token domain.Token
-	var access, refresh, session *string
+	var access, refresh, session, accountID *string
 	var expires *time.Time
 
-	err = s.pool.QueryRow(ctx, query, providerID, account).Scan(&access, &refresh, &session, &expires)
+	err = s.pool.QueryRow(ctx, query, providerID, account).Scan(&access, &refresh, &session, &accountID, &expires)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Token{}, fmt.Errorf("load token %q:\n%w", account, domain.ErrTokenNotFound)
 	}
@@ -137,16 +125,19 @@ WHERE provider_id = $1 AND account_label = $2`
 	if session != nil {
 		token.SessionKey = *session
 	}
+	if accountID != nil {
+		token.ChatGPTAccountID = *accountID
+	}
 	if expires != nil {
 		token.ExpiresAt = *expires
 	}
 	return token, nil
 }
 
-// SaveToken upserts the OAuth token for an account label under the default provider.
+// SaveToken upserts the OAuth token for an account label under the named provider.
 // It never touches cooldown_until (owned by the provider pool, a later batch).
-func (s *Store) SaveToken(ctx context.Context, account string, t domain.Token) error {
-	providerID, err := s.defaultProviderID(ctx)
+func (s *Store) SaveToken(ctx context.Context, providerName, account string, t domain.Token) error {
+	providerID, err := s.providerIDByName(ctx, providerName)
 	if err != nil {
 		return err
 	}
@@ -166,11 +157,12 @@ ON CONFLICT (provider_id, account_label) DO UPDATE SET
 	return nil
 }
 
-// SeedSessionKey inserts an account's durable session key when the account has no row yet. It is
-// the seed path's sole writer for session_key (never overwriting an existing row), keeping that
-// column's ownership separate from SaveToken, which writes only the derived access/refresh tokens.
-func (s *Store) SeedSessionKey(ctx context.Context, account, sessionKey string) error {
-	providerID, err := s.defaultProviderID(ctx)
+// SeedSessionKey inserts an account's durable session key when the account has no row yet under
+// the named provider. It is the seed path's sole writer for session_key (never overwriting an
+// existing row), keeping that column's ownership separate from SaveToken, which writes only the
+// derived access/refresh tokens.
+func (s *Store) SeedSessionKey(ctx context.Context, providerName, account, sessionKey string) error {
+	providerID, err := s.providerIDByName(ctx, providerName)
 	if err != nil {
 		return err
 	}
@@ -186,16 +178,44 @@ ON CONFLICT (provider_id, account_label) DO NOTHING`
 	return nil
 }
 
-// defaultProviderID resolves the id of the single V1 Claude Max provider by name.
-// The provider row is seeded by migration 0002; this is a read-only lookup with no
-// write side-effect. Filtering token operations on it keeps them unambiguous if a
-// second provider is ever added.
-func (s *Store) defaultProviderID(ctx context.Context) (int64, error) {
+// SeedCodexAccount inserts an account's durable refresh token and ChatGPT account ID when the
+// account has no row yet under the Codex provider. It is idempotent (never overwriting an existing
+// row), keeping initial credential seeding separate from token refresh writes.
+func (s *Store) SeedCodexAccount(ctx context.Context, label, refreshToken, accountID string) error {
+	providerID, err := s.providerIDByName(ctx, CodexProviderName)
+	if err != nil {
+		return fmt.Errorf("resolve codex provider id:\n%w", err)
+	}
+
+	const query = `
+INSERT INTO oauth_token (provider_id, account_label, refresh_token, chatgpt_account_id, updated_at)
+VALUES ($1, $2, $3, $4, now())
+ON CONFLICT (provider_id, account_label) DO NOTHING`
+
+	if _, err := s.pool.Exec(ctx, query, providerID, label, refreshToken, accountID); err != nil {
+		return fmt.Errorf("seed codex account %q:\n%w", label, err)
+	}
+	return nil
+}
+
+// providerIDByName resolves the integer id of the named provider, memoising the result so each
+// provider name hits the DB at most once per Store lifetime. The mutex is held during the DB call
+// so concurrent misses for the same name serialise rather than issue duplicate queries.
+func (s *Store) providerIDByName(ctx context.Context, name string) (int64, error) {
+	s.providerIDMu.Lock()
+	defer s.providerIDMu.Unlock()
+
+	if id, ok := s.providerIDCache[name]; ok {
+		return id, nil
+	}
+
 	const query = `SELECT id FROM provider WHERE name = $1`
 
 	var id int64
-	if err := s.pool.QueryRow(ctx, query, DefaultProviderName).Scan(&id); err != nil {
-		return 0, fmt.Errorf("resolve default provider %q:\n%w", DefaultProviderName, err)
+	if err := s.pool.QueryRow(ctx, query, name).Scan(&id); err != nil {
+		return 0, fmt.Errorf("resolve provider %q:\n%w", name, err)
 	}
+
+	s.providerIDCache[name] = id
 	return id, nil
 }
