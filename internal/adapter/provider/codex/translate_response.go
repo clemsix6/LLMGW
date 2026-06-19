@@ -84,20 +84,27 @@ type chatCompletionUsage struct {
 	TotalTokens      int `json:"total_tokens"`      // TotalTokens is the sum of input and output tokens.
 }
 
-// aggregateCompleted reads the Responses SSE stream using an unbounded bufio.Reader (no 64 KB
-// line limit) and returns the raw JSON of the response object from the response.completed event.
-// All preceding events are discarded; the function errors if the event is not found before EOF.
+// outputItemDoneEnvelope is the minimal shape of a response.output_item.done SSE data payload.
+type outputItemDoneEnvelope struct {
+	Type string          `json:"type"` // Type is "response.output_item.done".
+	Item responsesOutput `json:"item"` // Item is the completed output item.
+}
+
+// aggregateCompleted reads the Responses SSE stream using an unbounded bufio.Reader
+// (no 64 KB line limit). It collects non-reasoning items from response.output_item.done
+// events, captures id/model/created_at/usage from response.completed, then returns
+// a synthetic responsesCompleted JSON for translateResponse. The response.completed
+// output[] is always empty on the real backend — all content lives in the done events.
 func aggregateCompleted(upstream io.Reader) ([]byte, error) {
 	reader := bufio.NewReader(upstream)
+	var items []responsesOutput
+	var meta *responsesCompleted
+
 	for {
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 {
-			result, scanErr := scanCompletedLine(line)
-			if scanErr != nil {
+			if scanErr := scanAggLine(line, &items, &meta); scanErr != nil {
 				return nil, scanErr
-			}
-			if result != nil {
-				return result, nil
 			}
 		}
 		if err != nil {
@@ -107,24 +114,58 @@ func aggregateCompleted(upstream io.Reader) ([]byte, error) {
 			return nil, fmt.Errorf("read SSE stream:\n%w", err)
 		}
 	}
-	return nil, fmt.Errorf("response.completed event not found in upstream SSE")
+	if meta == nil {
+		return nil, fmt.Errorf("response.completed event not found in upstream SSE")
+	}
+	return buildSyntheticResponse(meta, items)
 }
 
-// scanCompletedLine checks whether line is a response.completed SSE data line and returns
-// its embedded response JSON. Returns (nil, nil) for non-matching lines.
-func scanCompletedLine(line []byte) ([]byte, error) {
+// scanAggLine examines one SSE data line: on response.output_item.done it appends the item
+// (if non-reasoning) to items; on response.completed it captures the metadata.
+func scanAggLine(line []byte, items *[]responsesOutput, meta **responsesCompleted) error {
 	data, ok := sseDataBytes(line)
 	if !ok {
-		return nil, nil
+		return nil
 	}
-	var env completedEventEnvelope
-	if err := json.Unmarshal(data, &env); err != nil || env.Type != "response.completed" {
-		return nil, nil
+	var typ struct {
+		Type string `json:"type"`
 	}
-	if len(env.Response) == 0 {
-		return nil, fmt.Errorf("response.completed event carries no response object")
+	if json.Unmarshal(data, &typ) != nil {
+		return nil
 	}
-	return env.Response, nil
+	switch typ.Type {
+	case "response.output_item.done":
+		var env outputItemDoneEnvelope
+		if json.Unmarshal(data, &env) == nil && env.Item.Type != "reasoning" {
+			*items = append(*items, env.Item)
+		}
+	case "response.completed":
+		var env completedEventEnvelope
+		if json.Unmarshal(data, &env) == nil && len(env.Response) > 0 {
+			var m responsesCompleted
+			if json.Unmarshal(env.Response, &m) == nil {
+				*meta = &m
+			}
+		}
+	}
+	return nil
+}
+
+// buildSyntheticResponse assembles a JSON-encoded responsesCompleted from the collected
+// output items and the metadata extracted from the response.completed event.
+func buildSyntheticResponse(meta *responsesCompleted, items []responsesOutput) ([]byte, error) {
+	synth := responsesCompleted{
+		ID:        meta.ID,
+		Model:     meta.Model,
+		CreatedAt: meta.CreatedAt,
+		Output:    items,
+		Usage:     meta.Usage,
+	}
+	out, err := json.Marshal(synth)
+	if err != nil {
+		return nil, fmt.Errorf("marshal synthetic response:\n%w", err)
+	}
+	return out, nil
 }
 
 // sseDataBytes extracts the JSON payload from an SSE "data:" line, reporting false for

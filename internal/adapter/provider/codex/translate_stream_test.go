@@ -156,6 +156,36 @@ func TestRelayTranslatedStreamLargeCreatedEvent(t *testing.T) {
 	}
 }
 
+// TestRelayTranslatedStreamRealToolStream drives the streaming path against the real-format
+// tool stream (responses_tool.sse) and verifies: tool_calls chunk with name "get_weather"
+// and arguments from deltas, finish_reason "tool_calls", stream ends with [DONE].
+func TestRelayTranslatedStreamRealToolStream(t *testing.T) {
+	sink := &captureSink{}
+	u, err := relayTranslatedStream(readTestdataReader(t, "responses_tool.sse"), sink, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := sink.String()
+	if !strings.Contains(s, "get_weather") {
+		t.Fatal("expected function name get_weather in stream output")
+	}
+	if !strings.Contains(s, "Paris") {
+		t.Fatal("expected argument Paris in stream output")
+	}
+	if !strings.Contains(s, `"tool_calls"`) {
+		t.Fatal("expected finish_reason tool_calls in stream output")
+	}
+	if !strings.HasSuffix(strings.TrimSpace(s), "data: [DONE]") {
+		t.Fatalf("stream did not end with [DONE]: %s", s)
+	}
+	if strings.Contains(s, "instructions") || strings.Contains(s, "reasoning") {
+		t.Fatal("instructions or reasoning leaked into stream output")
+	}
+	if u.InputTokens != 60 || u.OutputTokens != 18 {
+		t.Fatalf("wrong usage from tool stream: %+v", u)
+	}
+}
+
 // TestParseIncludeUsage verifies that parseIncludeUsage extracts stream_options.include_usage
 // correctly from a Chat Completions body.
 func TestParseIncludeUsage(t *testing.T) {

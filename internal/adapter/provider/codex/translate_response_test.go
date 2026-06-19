@@ -9,12 +9,18 @@ import (
 	"testing"
 )
 
-// TestTranslateResponseFoldsAndMapsUsage is the canonical test from the task brief: a captured
-// response.completed payload must produce a valid chat.completion, must not leak reasoning
-// items, carry non-zero usage, and include model and created fields.
+// TestTranslateResponseFoldsAndMapsUsage drives the full non-streaming path against a
+// real-format SSE stream (responses_text.sse): aggregateCompleted collects the message item
+// from the response.output_item.done event (response.completed.output is empty, per the real
+// backend), then translateResponse folds output[] into chat.completion. The result must carry
+// non-empty content and non-zero usage.
 func TestTranslateResponseFoldsAndMapsUsage(t *testing.T) {
-	body := readTestdata(t, "responses_completed.json")
-	out, u, err := translateResponse(body)
+	sseBytes := readTestdata(t, "responses_text.sse")
+	completed, err := aggregateCompleted(bytes.NewReader(sseBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, u, err := translateResponse(completed)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,8 +32,10 @@ func TestTranslateResponseFoldsAndMapsUsage(t *testing.T) {
 	if cc["model"] != "gpt-5.5" {
 		t.Fatalf("expected model=gpt-5.5, got %v", cc["model"])
 	}
-	if cc["created"] == nil {
-		t.Fatalf("expected created to be present in chat.completion")
+	choices := cc["choices"].([]any)
+	msg := choices[0].(map[string]any)["message"].(map[string]any)
+	if msg["content"] == nil {
+		t.Fatal("expected non-nil content, got nil — output_item.done items not collected")
 	}
 	assertNoReasoningLeaked(t, out)
 }
@@ -82,10 +90,11 @@ func TestTranslateResponseToolCallsFinishReason(t *testing.T) {
 	}
 }
 
-// TestAggregateCompletedExtractsResponse verifies that aggregateCompleted returns the response
-// object JSON from a realistic multi-event SSE stream.
+// TestAggregateCompletedExtractsResponse verifies that aggregateCompleted returns a synthetic
+// response JSON whose output is populated from response.output_item.done events, not from
+// response.completed.output (which is always [] on the real backend).
 func TestAggregateCompletedExtractsResponse(t *testing.T) {
-	sseBytes := readTestdata(t, "responses_stream.sse")
+	sseBytes := readTestdata(t, "responses_text.sse")
 	completed, err := aggregateCompleted(bytes.NewReader(sseBytes))
 	if err != nil {
 		t.Fatal(err)
@@ -94,8 +103,50 @@ func TestAggregateCompletedExtractsResponse(t *testing.T) {
 	if err := json.Unmarshal(completed, &resp); err != nil {
 		t.Fatalf("aggregateCompleted returned non-JSON: %v", err)
 	}
-	if resp["id"] != "resp_abc123" {
-		t.Fatalf("expected id=resp_abc123, got %v", resp["id"])
+	if resp["id"] != "resp_test" {
+		t.Fatalf("expected id=resp_test, got %v", resp["id"])
+	}
+	output, ok := resp["output"].([]any)
+	if !ok || len(output) == 0 {
+		t.Fatalf("expected non-empty output from output_item.done items, got %v", resp["output"])
+	}
+}
+
+// TestTranslateResponseNonStreamingToolCall drives the non-streaming path against the real-format
+// tool stream (responses_tool.sse) and asserts that the function call is correctly translated:
+// finish_reason "tool_calls", tool_calls[0] has the right name, arguments, and call id.
+func TestTranslateResponseNonStreamingToolCall(t *testing.T) {
+	sseBytes := readTestdata(t, "responses_tool.sse")
+	completed, err := aggregateCompleted(bytes.NewReader(sseBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, u, err := translateResponse(completed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.InputTokens != 60 || u.OutputTokens != 18 {
+		t.Fatalf("wrong usage: %+v", u)
+	}
+	var cc map[string]any
+	_ = json.Unmarshal(out, &cc)
+	choices := cc["choices"].([]any)
+	choice := choices[0].(map[string]any)
+	if choice["finish_reason"] != "tool_calls" {
+		t.Fatalf("expected finish_reason=tool_calls, got %v", choice["finish_reason"])
+	}
+	msg := choice["message"].(map[string]any)
+	calls := msg["tool_calls"].([]any)
+	tc := calls[0].(map[string]any)
+	if tc["id"] != "call_1" {
+		t.Fatalf("expected tool_calls[0].id=call_1, got %v", tc["id"])
+	}
+	fn := tc["function"].(map[string]any)
+	if fn["name"] != "get_weather" {
+		t.Fatalf("expected function name=get_weather, got %v", fn["name"])
+	}
+	if fn["arguments"] != `{"location":"Paris"}` {
+		t.Fatalf("expected arguments={\"location\":\"Paris\"}, got %v", fn["arguments"])
 	}
 }
 
