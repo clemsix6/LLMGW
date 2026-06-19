@@ -123,9 +123,8 @@ type StreamSink interface {
 
 // Provider forwards a request to an upstream LLM backend.
 type Provider interface {
-	// Send forwards req upstream. For non-streaming it writes the JSON body to out and
-	// returns the Usage; for streaming it relays SSE to out while accumulating Usage.
-	Send(ctx context.Context, req llm.ChatRequest, out StreamSink) (usage.Usage, error)
+	// Send forwards req upstream, writing the response to out and returning the Usage.
+	Send(ctx context.Context, req llm.Request, out StreamSink) (usage.Usage, error)
 }
 
 // Store is the persistence port: configuration, usage counters, reservations, and tokens.

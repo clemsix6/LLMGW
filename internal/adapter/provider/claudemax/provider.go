@@ -90,7 +90,12 @@ func New(store accountStore, claudeCodeVersion string) *Provider {
 // the next account. When every account is cooling it returns *AllCoolingError so the handler can
 // reply 503. A success or any non-rate-limit error is returned immediately — once bytes reach out
 // the relay cannot be retried. Both the non-streaming and streaming paths flow through here.
-func (p *Provider) Send(ctx context.Context, req llm.ChatRequest, out domain.StreamSink) (usage.Usage, error) {
+func (p *Provider) Send(ctx context.Context, req llm.Request, out domain.StreamSink) (usage.Usage, error) {
+	chat, err := llm.ParseRequest(req.Bytes())
+	if err != nil {
+		return usage.Usage{}, fmt.Errorf("parse anthropic request:\n%w", err)
+	}
+
 	accounts, err := p.store.LoadAccounts(ctx)
 	if err != nil {
 		return usage.Usage{}, fmt.Errorf("load accounts:\n%w", err)
@@ -98,7 +103,7 @@ func (p *Provider) Send(ctx context.Context, req llm.ChatRequest, out domain.Str
 
 	now := time.Now()
 	for _, account := range p.selectOrder(accounts, now) {
-		metered, err := p.sendVia(ctx, account, req, out)
+		metered, err := p.sendVia(ctx, account, chat, out)
 
 		if until, retry := cooldownFor(err, now); retry {
 			p.cool(ctx, account, until)

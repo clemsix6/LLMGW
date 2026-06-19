@@ -6,6 +6,20 @@ import (
 	"strings"
 )
 
+// Request is the wire-agnostic view the gateway needs to meter and route a call, regardless
+// of the provider's wire format. The HTTP wire resolves model/stream with a light parse and
+// carries the raw body; the provider does the single full parse of Bytes() in its own wire.
+type Request interface {
+	// Model returns the requested model id, used for usage rows and routing.
+	Model() string
+
+	// Stream reports whether the consumer asked for a streamed (SSE) response.
+	Stream() bool
+
+	// Bytes returns the raw client request body, parsed by the provider's wire.
+	Bytes() []byte
+}
+
 // ChatRequest is a single Anthropic Messages request flowing through the gateway.
 // V1 keeps the body unchanged except for a prepended Claude Code system block, so the
 // request stays compatible with any Anthropic SDK. Unknown fields (tools, metadata, ...)
