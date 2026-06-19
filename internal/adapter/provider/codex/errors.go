@@ -1,8 +1,10 @@
 package codex
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/clemsix6/LLMGW/internal/domain"
@@ -13,6 +15,7 @@ var (
 	_ domain.ProviderError = (*RateLimitError)(nil)
 	_ domain.ProviderError = (*UpstreamError)(nil)
 	_ domain.ProviderError = (*DeadRefreshTokenError)(nil)
+	_ domain.ProviderError = (*AllCoolingError)(nil)
 )
 
 // RateLimitError reports that the Codex backend rate-limited the request. ResetAt carries the
@@ -89,3 +92,90 @@ func (e *DeadRefreshTokenError) ErrorType() string { return "dead_refresh_token"
 
 // RetryAfter returns (0, false); no retry hint applies for a dead token.
 func (e *DeadRefreshTokenError) RetryAfter() (time.Duration, bool) { return 0, false }
+
+// AllCoolingError reports that every account in the pool is on cooldown, so no request can be
+// served right now. After is the delay until the soonest account becomes available; the handler
+// maps it to a 503 with a Retry-After header.
+type AllCoolingError struct {
+	After time.Duration // After is the wait until the earliest account's cooldown clears.
+}
+
+// Error implements the error interface.
+func (e *AllCoolingError) Error() string {
+	return fmt.Sprintf("codex: all accounts cooling; retry after %s", e.After)
+}
+
+// HTTPStatus returns 503 Service Unavailable; all accounts are cooling.
+func (e *AllCoolingError) HTTPStatus() int { return 503 }
+
+// ErrorType returns the stable classifier "all_cooling".
+func (e *AllCoolingError) ErrorType() string { return "all_cooling" }
+
+// RetryAfter returns the known backoff duration (always present for AllCoolingError).
+func (e *AllCoolingError) RetryAfter() (time.Duration, bool) { return e.After, true }
+
+// cooldownFor decides whether an error from one account's Send attempt should fail over to the
+// next account, and until when the failing account is cooled. Account-specific or transient
+// failures retry — a rate limit (429), a dead credential, or an upstream 5xx/401/403 — each
+// cooled so selectOrder skips the account meanwhile. Request-level errors (a malformed 4xx, a
+// parse failure) return false: they would fail on every account, so they surface to the caller.
+func cooldownFor(err error, now time.Time) (time.Time, bool) {
+	if err == nil {
+		return time.Time{}, false
+	}
+
+	var rate *RateLimitError
+	if errors.As(err, &rate) {
+		if !rate.ResetAt.IsZero() {
+			return rate.ResetAt, true
+		}
+		return now.Add(defaultCooldown), true
+	}
+
+	var dead *DeadRefreshTokenError
+	if errors.As(err, &dead) {
+		return now.Add(deadTokenCooldown), true
+	}
+
+	var upstream *UpstreamError
+	if errors.As(err, &upstream) && shouldFailoverStatus(upstream.Status) {
+		return now.Add(defaultCooldown), true
+	}
+
+	return time.Time{}, false
+}
+
+// shouldFailoverStatus reports whether an upstream HTTP status is account-specific or transient
+// enough to try the next account: auth rejections (401/403, e.g. Cloudflare originator blocks)
+// and server errors (5xx). Other 4xx are request-level and surface unchanged.
+func shouldFailoverStatus(status int) bool {
+	return status == http.StatusUnauthorized ||
+		status == http.StatusForbidden ||
+		status >= 500
+}
+
+// classifyUpstream maps a non-200 Codex Responses response to a typed error: a 429 becomes a
+// RateLimitError (carrying the reset time when present from Retry-After), anything else an
+// UpstreamError (surfaced or failed over depending on the HTTP status).
+func classifyUpstream(status int, header http.Header, body []byte) error {
+	if status == http.StatusTooManyRequests {
+		return &RateLimitError{ResetAt: parseResetAt(header, time.Now())}
+	}
+	return &UpstreamError{Status: status, Body: string(body)}
+}
+
+// parseResetAt extracts the rate-limit reset time from a Retry-After header (delta seconds or
+// HTTP date), returning the zero time when no hint is present.
+func parseResetAt(header http.Header, now time.Time) time.Time {
+	value := header.Get("retry-after")
+	if value == "" {
+		return time.Time{}
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		return now.Add(time.Duration(seconds) * time.Second)
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		return at
+	}
+	return time.Time{}
+}

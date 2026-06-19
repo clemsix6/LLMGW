@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
@@ -28,29 +28,24 @@ const (
 	responsesPath = "/responses"
 )
 
-// accountStore is the persistence the provider needs: per-account token access (for the token
-// manager) plus the account roster so the single-account skeleton can pick an account to serve.
-type accountStore interface {
-	tokenStore
-
-	// LoadAccounts returns every account for the named provider with its cooldown state.
-	LoadAccounts(ctx context.Context, providerName string) ([]domain.Account, error)
-}
-
 // Provider forwards Chat Completions requests to the ChatGPT Codex subscription over OAuth,
-// translating to/from the Responses API and applying the Codex client spoof.
+// translating to/from the Responses API and applying the Codex client spoof. It holds a pool of
+// accounts and rotates across them round-robin, putting an account on cooldown when the upstream
+// rate-limits or rejects it.
 type Provider struct {
 	tokens *tokenManager // tokens hands out valid OAuth access tokens and the account id.
 
 	spoof spoof // spoof sets the Codex client request headers.
 
-	store accountStore // store lists the pool's accounts.
+	store accountStore // store lists the pool's accounts and persists their cooldown state.
 
 	providerName string // providerName scopes every store call to the Codex provider.
 
 	httpClient *http.Client // httpClient performs the upstream request.
 
 	baseURL string // baseURL is the Codex Responses base; injectable for tests.
+
+	next atomic.Uint64 // next is the round-robin cursor, advanced once per Send.
 }
 
 // New builds a Codex provider over the accounts persisted in store, spoofing version.
@@ -65,15 +60,35 @@ func New(store accountStore, version string) *Provider {
 	}
 }
 
-// Send translates the Chat Completions request to the Responses API, calls the Codex backend,
-// and writes the result to out. Non-streaming: the upstream SSE is aggregated and a single
-// chat.completion object is emitted. Streaming is reserved for Task 11.
+// Send forwards a request through the next non-cooling account, rotating round-robin. On an
+// upstream 429 it cools that account (honoring the reset header, else a short default) and retries
+// the next account. Auth or 5xx failures are also cooled and failed over. When every account is
+// cooling it returns *AllCoolingError so the handler can reply 503. Once bytes reach out the relay
+// cannot be retried — the non-2xx detection in handleResp happens before any write to out.
 func (p *Provider) Send(ctx context.Context, req llm.Request, out domain.StreamSink) (usage.Usage, error) {
-	account, err := p.pickAccount(ctx)
+	accounts, err := p.store.LoadAccounts(ctx, p.providerName)
 	if err != nil {
-		return usage.Usage{}, err
+		return usage.Usage{}, fmt.Errorf("load accounts:\n%w", err)
 	}
 
+	now := time.Now()
+	for _, account := range p.selectOrder(accounts, now) {
+		metered, err := p.sendVia(ctx, account, req, out)
+
+		if until, retry := cooldownFor(err, now); retry {
+			p.cool(ctx, account, until)
+			continue
+		}
+		return metered, err
+	}
+
+	return usage.Usage{}, p.allCooling(ctx, now)
+}
+
+// sendVia forwards the request through one account: it obtains a valid access token, translates
+// the request, and relays the upstream response. An upstream non-200 surfaces as a typed error
+// before any byte is written to out, preserving the failover contract.
+func (p *Provider) sendVia(ctx context.Context, account string, req llm.Request, out domain.StreamSink) (usage.Usage, error) {
 	accessToken, accountID, err := p.tokens.Valid(ctx, account)
 	if err != nil {
 		return usage.Usage{}, fmt.Errorf("obtain access token:\n%w", err)
@@ -96,19 +111,6 @@ func (p *Provider) Send(ctx context.Context, req llm.Request, out domain.StreamS
 	defer resp.Body.Close()
 
 	return p.handleResp(resp, req.Stream(), out, parseIncludeUsage(req.Bytes()))
-}
-
-// pickAccount returns the first seeded account label, the one the skeleton serves. An empty pool
-// is a dead credential from the caller's perspective.
-func (p *Provider) pickAccount(ctx context.Context) (string, error) {
-	accounts, err := p.store.LoadAccounts(ctx, p.providerName)
-	if err != nil {
-		return "", fmt.Errorf("load accounts:\n%w", err)
-	}
-	if len(accounts) == 0 {
-		return "", &DeadRefreshTokenError{Account: "(none seeded)"}
-	}
-	return accounts[0].Label, nil
 }
 
 // newRequest builds an HTTP request with the translated Responses body and Codex spoof headers.
@@ -193,29 +195,4 @@ func handleNonStreaming(body io.Reader, out domain.StreamSink) (usage.Usage, err
 	}
 	out.Flush()
 	return u, nil
-}
-
-// classifyUpstream maps a non-200 Codex response to a typed error: a 429 becomes a RateLimitError
-// (carrying the reset time when present), anything else an UpstreamError.
-func classifyUpstream(status int, header http.Header, body []byte) error {
-	if status == http.StatusTooManyRequests {
-		return &RateLimitError{ResetAt: parseResetAt(header, time.Now())}
-	}
-	return &UpstreamError{Status: status, Body: string(body)}
-}
-
-// parseResetAt extracts the rate-limit reset time from a Retry-After header (delta seconds or HTTP
-// date), returning the zero time when no hint is present.
-func parseResetAt(header http.Header, now time.Time) time.Time {
-	value := header.Get("retry-after")
-	if value == "" {
-		return time.Time{}
-	}
-	if seconds, err := strconv.Atoi(value); err == nil {
-		return now.Add(time.Duration(seconds) * time.Second)
-	}
-	if at, err := http.ParseTime(value); err == nil {
-		return at
-	}
-	return time.Time{}
 }
