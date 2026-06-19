@@ -138,9 +138,6 @@ type Store interface {
 	// PriceFor returns the notional per-million-token input/output USD prices for a model.
 	PriceFor(ctx context.Context, model string) (in, out float64, ok bool, err error)
 
-	// DefaultRoute resolves the provider serving requests in V1 (the single default route).
-	DefaultRoute(ctx context.Context) (Provider, error)
-
 	// RecordUsage persists a completed call as a usage_event row.
 	RecordUsage(ctx context.Context, e UsageEvent) error
 

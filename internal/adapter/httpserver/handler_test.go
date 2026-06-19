@@ -35,11 +35,6 @@ func (s *fakeStore) PriceFor(_ context.Context, _ string) (float64, float64, boo
 	return 0, 0, false, nil
 }
 
-// DefaultRoute returns nil (handler tests inject the provider directly).
-func (s *fakeStore) DefaultRoute(_ context.Context) (domain.Provider, error) {
-	return nil, nil
-}
-
 // RecordUsage captures the token counts from the event.
 func (s *fakeStore) RecordUsage(_ context.Context, e domain.UsageEvent) error {
 	s.recorded = usage.Usage{InputTokens: e.InputTokens, OutputTokens: e.OutputTokens}

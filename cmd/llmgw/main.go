@@ -34,8 +34,8 @@ func main() {
 	}
 }
 
-// run loads configuration, opens the store (applying migrations), wires the provider, and serves
-// HTTP until a shutdown signal arrives.
+// run loads configuration, opens the store (applying migrations), builds the route table, and
+// serves HTTP until a shutdown signal arrives.
 func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -59,25 +59,27 @@ func run() error {
 		return err
 	}
 
-	provider := claudemax.New(store, cfg.ClaudeCodeVersion)
-	store.SetDefaultProvider(provider)
+	claude := claudemax.New(store, cfg.ClaudeCodeVersion)
+	routes := []httpserver.Route{{
+		Path:         "/v1/messages",
+		Provider:     claude,
+		Wire:         httpserver.AnthropicWire{},
+		ProviderName: postgres.DefaultProviderName,
+	}}
 
-	return serve(ctx, cfg, store)
+	return serve(ctx, cfg, store, routes)
 }
 
 // serve binds the listener, starts the background pruner, runs the HTTP server, and on a shutdown
 // signal drains connections gracefully. It always stops the pruner and waits for it to finish
 // before returning, so no prune query races the deferred pool close.
-func serve(ctx context.Context, cfg config.Config, store *postgres.Store) error {
+func serve(ctx context.Context, cfg config.Config, store *postgres.Store, routes []httpserver.Route) error {
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		return fmt.Errorf("listen on %s:\n%w", cfg.Listen, err)
 	}
 
-	server, err := httpserver.New(store, postgres.DefaultProviderName, cfg.DefaultProject)
-	if err != nil {
-		return fmt.Errorf("build http server:\n%w", err)
-	}
+	server := httpserver.New(store, cfg.DefaultProject, routes)
 
 	pruneCtx, stopPruner := context.WithCancel(context.Background())
 	prunerDone := startPruner(pruneCtx, store)

@@ -19,7 +19,7 @@ type handler struct {
 
 	provider domain.Provider // provider is the upstream backend for this route.
 
-	w wire // w parses request bodies and supplies the default tag for this route.
+	w Wire // w parses request bodies and supplies the default tag for this route.
 
 	providerName string // providerName labels the backend on every recorded usage_event.
 
@@ -27,7 +27,7 @@ type handler struct {
 }
 
 // newHandler constructs a handler with all dependencies injected.
-func newHandler(store domain.Store, provider domain.Provider, w wire, providerName, defaultProject string) *handler {
+func newHandler(store domain.Store, provider domain.Provider, w Wire, providerName, defaultProject string) *handler {
 	return &handler{
 		store:          store,
 		provider:       provider,

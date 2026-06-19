@@ -33,7 +33,8 @@ type Harness struct {
 	container *tcpostgres.PostgresContainer // container is the ephemeral Postgres instance.
 }
 
-// Start launches Postgres, applies migrations, and boots the gateway on a random port.
+// Start launches Postgres, applies migrations, and boots the gateway on a random port with
+// no LLM routes registered (only GET /health). Call SeedClaudeMax to register /v1/messages.
 func Start(ctx context.Context) (*Harness, error) {
 	container, dsn, err := startPostgres(ctx)
 	if err != nil {
@@ -53,12 +54,7 @@ func Start(ctx context.Context) (*Harness, error) {
 		return nil, fmt.Errorf("listen:\n%w", err)
 	}
 
-	server, err := httpserver.New(store, postgres.DefaultProviderName, "")
-	if err != nil {
-		store.Close()
-		_ = container.Terminate(ctx)
-		return nil, fmt.Errorf("build http server:\n%w", err)
-	}
+	server := httpserver.New(store, "", nil)
 	go func() { _ = server.Serve(listener) }()
 
 	return &Harness{
@@ -95,16 +91,36 @@ func startPostgres(ctx context.Context) (*tcpostgres.PostgresContainer, string, 
 	return container, dsn, nil
 }
 
-// SeedClaudeMax persists the account's OAuth token and wires the Claude Max provider so the
-// gateway can forward to the real Anthropic API. It must be called before issuing any
-// /v1/messages request (the handler resolves the provider lazily, per request). The token carries
-// the shared access token (refreshed once per run by the coordinator), so the provider serves it
-// directly without triggering a per-test refresh of the single-use refresh token.
+// SeedClaudeMax persists the account's OAuth token and rebuilds the server with the Claude Max
+// route wired to /v1/messages. It replaces the no-route server started by Start, so the gateway
+// can forward to the real Anthropic API. The token carries the shared access token (refreshed
+// once per run by the coordinator), so the provider serves it directly without triggering a
+// per-test refresh of the single-use refresh token.
 func (h *Harness) SeedClaudeMax(ctx context.Context, account string, token domain.Token, version string) error {
 	if err := h.store.SaveToken(ctx, postgres.DefaultProviderName, account, token); err != nil {
 		return fmt.Errorf("seed token:\n%w", err)
 	}
-	h.store.SetDefaultProvider(claudemax.New(h.store, version))
+
+	// Shut down the no-route server; this closes the old listener.
+	_ = h.server.Shutdown(ctx)
+
+	// Open a new listener on a fresh random port.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("rebind listener:\n%w", err)
+	}
+	h.listener = listener
+	h.BaseURL = "http://" + listener.Addr().String()
+
+	claude := claudemax.New(h.store, version)
+	routes := []httpserver.Route{{
+		Path:         "/v1/messages",
+		Provider:     claude,
+		Wire:         httpserver.AnthropicWire{},
+		ProviderName: postgres.DefaultProviderName,
+	}}
+	h.server = httpserver.New(h.store, "", routes)
+	go func() { _ = h.server.Serve(h.listener) }()
 	return nil
 }
 

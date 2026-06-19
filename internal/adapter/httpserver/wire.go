@@ -4,10 +4,10 @@ import (
 	"github.com/clemsix6/LLMGW/internal/domain/llm"
 )
 
-// wire is the per-route body parser and default-tag provider. Each route registers its own
-// wire so the handler core stays generic: the wire decodes the client body into the
+// Wire is the per-route body parser and default-tag provider. Each route registers its own
+// Wire so the handler core stays generic: the Wire decodes the client body into the
 // wire-agnostic llm.Request and supplies the default budget tag when X-Tags is absent.
-type wire interface {
+type Wire interface {
 	// Parse decodes a raw request body into a wire-agnostic Request.
 	Parse(body []byte) (llm.Request, error)
 
@@ -15,9 +15,7 @@ type wire interface {
 	DefaultTag() string
 }
 
-// AnthropicWire parses native Anthropic Messages request bodies. It is used on both the
-// canonical /v1/messages route and the OpenAI-alias /chat/completions route until Task 5
-// introduces per-route wire selection.
+// AnthropicWire parses native Anthropic Messages request bodies.
 type AnthropicWire struct{}
 
 // Parse decodes an Anthropic Messages body via llm.ParseRequest.
