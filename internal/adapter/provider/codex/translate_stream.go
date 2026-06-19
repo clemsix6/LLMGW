@@ -50,14 +50,14 @@ type chunkFuncDelta struct {
 
 // streamState holds the mutable translation state for one streaming response.
 type streamState struct {
-	id             string         // id is the Responses response id extracted from response.created.
-	model          string         // model is the model identifier extracted from response.created.
-	created        int64          // created is the Unix timestamp used for all emitted chunks.
-	hasToolCall    bool           // hasToolCall is true once any function-call item has been emitted.
-	includeUsage   bool           // includeUsage controls emission of the final usage-only chunk.
-	usage          responsesUsage // usage is populated from response.completed.
-	toolCallCount  int            // toolCallCount is the number of function-call items introduced so far.
-	toolCallIndex  map[int]int    // toolCallIndex maps Responses output_index to the 0-based sequential client index.
+	id            string         // id is the Responses response id extracted from response.created.
+	model         string         // model is the model identifier extracted from response.created.
+	created       int64          // created is the Unix timestamp used for all emitted chunks.
+	hasToolCall   bool           // hasToolCall is true once any function-call item has been emitted.
+	includeUsage  bool           // includeUsage controls emission of the final usage-only chunk.
+	usage         responsesUsage // usage is populated from response.completed.
+	toolCallCount int            // toolCallCount is the number of function-call items introduced so far.
+	toolCallIndex map[int]int    // toolCallIndex maps Responses output_index to the 0-based sequential client index.
 }
 
 // toUsage converts the accumulated Responses API token counts to domain usage.
@@ -80,10 +80,10 @@ func (s *streamState) assignToolIndex(outputIndex int) int {
 // responsesStreamEvent is the minimal shape of a Responses API SSE event, covering all
 // event types encountered during streaming translation.
 type responsesStreamEvent struct {
-	Type        string          `json:"type"`             // Type is the event type (e.g. "response.output_text.delta").
-	OutputIndex int             `json:"output_index"`     // OutputIndex maps to the tool-call index.
-	Delta       string          `json:"delta"`            // Delta is the text or argument fragment.
-	Item        *streamAddedItem `json:"item,omitempty"`  // Item is present on response.output_item.added.
+	Type        string           `json:"type"`               // Type is the event type (e.g. "response.output_text.delta").
+	OutputIndex int              `json:"output_index"`       // OutputIndex maps to the tool-call index.
+	Delta       string           `json:"delta"`              // Delta is the text or argument fragment.
+	Item        *streamAddedItem `json:"item,omitempty"`     // Item is present on response.output_item.added.
 	Response    *streamRespMeta  `json:"response,omitempty"` // Response is present on response.created and response.completed.
 }
 
@@ -97,8 +97,8 @@ type streamAddedItem struct {
 // streamRespMeta is the minimal response object parsed from response.created and
 // response.completed — enough to extract id, model, and usage without the full output array.
 type streamRespMeta struct {
-	ID    string          `json:"id"`            // ID is the Responses API response identifier.
-	Model string          `json:"model"`         // Model is the model identifier.
+	ID    string          `json:"id"`              // ID is the Responses API response identifier.
+	Model string          `json:"model"`           // Model is the model identifier.
 	Usage *responsesUsage `json:"usage,omitempty"` // Usage is present on response.completed only.
 }
 

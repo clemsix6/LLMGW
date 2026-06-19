@@ -2,6 +2,8 @@ package codex
 
 import (
 	"encoding/json"
+	"errors"
+	"net/http"
 	"testing"
 )
 
@@ -45,12 +47,21 @@ func TestTranslateRequestAssistantToolCall(t *testing.T) {
 	assertInputContainsType(t, input, "function_call_output")
 }
 
-// TestTranslateRequestInvalidModel verifies that an unknown model id causes an error.
+// TestTranslateRequestInvalidModel verifies that an unknown model id causes an *InvalidModelError
+// with HTTPStatus 400, so the handler surfaces a 4xx (not 500) to retry-aware clients.
 func TestTranslateRequestInvalidModel(t *testing.T) {
 	in := []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`)
 	_, err := translateRequest(in, "inst")
 	if err == nil {
 		t.Fatal("expected error for unknown model")
+	}
+
+	var invalid *InvalidModelError
+	if !errors.As(err, &invalid) {
+		t.Fatalf("expected *InvalidModelError, got %T: %v", err, err)
+	}
+	if invalid.HTTPStatus() != http.StatusBadRequest {
+		t.Fatalf("HTTPStatus = %d, want %d", invalid.HTTPStatus(), http.StatusBadRequest)
 	}
 }
 

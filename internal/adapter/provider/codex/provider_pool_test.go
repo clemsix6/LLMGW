@@ -474,4 +474,3 @@ func newCodexPoolStore(t *testing.T, ctx context.Context) (*postgres.Store, stri
 	t.Cleanup(store.Close)
 	return store, dsn
 }
-

@@ -141,16 +141,19 @@ func parseCodexAccounts(raw string) ([]CodexAccount, error) {
 }
 
 // parseCodexTriplet splits a single "label:refresh_token:account_id" triplet into a CodexAccount.
+// It rejects any entry that does not contain exactly three colon-separated fields, so a token
+// or account_id that contains a colon (which would make the split ambiguous) is caught early.
 func parseCodexTriplet(triplet string) (CodexAccount, error) {
-	label, rest, ok := strings.Cut(triplet, ":")
-	label = strings.TrimSpace(label)
-	if !ok || label == "" {
+	parts := strings.Split(triplet, ":")
+	if len(parts) != 3 {
 		return CodexAccount{}, fmt.Errorf("invalid codex account triplet %q (want label:refresh_token:account_id)", triplet)
 	}
 
-	refreshToken, accountID, ok := strings.Cut(rest, ":")
-	refreshToken, accountID = strings.TrimSpace(refreshToken), strings.TrimSpace(accountID)
-	if !ok || refreshToken == "" || accountID == "" {
+	label := strings.TrimSpace(parts[0])
+	refreshToken := strings.TrimSpace(parts[1])
+	accountID := strings.TrimSpace(parts[2])
+
+	if label == "" || refreshToken == "" || accountID == "" {
 		return CodexAccount{}, fmt.Errorf("invalid codex account triplet %q (want label:refresh_token:account_id)", triplet)
 	}
 

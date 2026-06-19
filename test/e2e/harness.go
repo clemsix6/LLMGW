@@ -103,7 +103,9 @@ func (h *Harness) SeedClaudeMax(ctx context.Context, account string, token domai
 	}
 
 	// Shut down the no-route server; this closes the old listener.
-	_ = h.server.Shutdown(ctx)
+	if err := h.server.Shutdown(ctx); err != nil {
+		return fmt.Errorf("shutdown old server:\n%w", err)
+	}
 
 	// Open a new listener on a fresh random port.
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -133,7 +135,9 @@ func (h *Harness) SeedCodex(ctx context.Context, account, refreshToken, accountI
 		return fmt.Errorf("seed codex account:\n%w", err)
 	}
 
-	_ = h.server.Shutdown(ctx)
+	if err := h.server.Shutdown(ctx); err != nil {
+		return fmt.Errorf("shutdown old server:\n%w", err)
+	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

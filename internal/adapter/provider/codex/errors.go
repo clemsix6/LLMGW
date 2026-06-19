@@ -16,7 +16,29 @@ var (
 	_ domain.ProviderError = (*UpstreamError)(nil)
 	_ domain.ProviderError = (*DeadRefreshTokenError)(nil)
 	_ domain.ProviderError = (*AllCoolingError)(nil)
+	_ domain.ProviderError = (*InvalidModelError)(nil)
 )
+
+// InvalidModelError reports that the requested model is not served by the Codex subscription
+// backend. It is a permanent request-level error: a bad model fails on every account, so no
+// account failover is attempted. HTTPStatus returns 400 so retry-aware clients do not retry.
+type InvalidModelError struct {
+	Model string // Model is the unrecognised model id.
+}
+
+// Error implements the error interface.
+func (e *InvalidModelError) Error() string {
+	return fmt.Sprintf("unknown Codex model %q: must be one of gpt-5, gpt-5-codex, gpt-5.5", e.Model)
+}
+
+// HTTPStatus returns 400 Bad Request; the model is not served by Codex.
+func (e *InvalidModelError) HTTPStatus() int { return http.StatusBadRequest }
+
+// ErrorType returns the stable classifier "invalid_request".
+func (e *InvalidModelError) ErrorType() string { return "invalid_request" }
+
+// RetryAfter returns (0, false); a bad model never becomes valid.
+func (e *InvalidModelError) RetryAfter() (time.Duration, bool) { return 0, false }
 
 // RateLimitError reports that the Codex backend rate-limited the request. ResetAt carries the
 // time the limit clears when the upstream provides it, otherwise it is the zero time.

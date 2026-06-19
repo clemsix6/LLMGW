@@ -176,8 +176,8 @@ func foldOutput(output []responsesOutput) (*string, []chatToolCall) {
 			}
 		case "function_call":
 			calls = append(calls, chatToolCall{
-				ID:   item.CallID,
-				Type: "function",
+				ID:       item.CallID,
+				Type:     "function",
 				Function: chatCallFunc{Name: item.Name, Arguments: item.Arguments},
 			})
 			// "reasoning" items are intentionally absent from this switch (spec §5.3 DROP).

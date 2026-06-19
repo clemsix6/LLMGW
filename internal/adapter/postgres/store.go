@@ -184,7 +184,7 @@ ON CONFLICT (provider_id, account_label) DO NOTHING`
 func (s *Store) SeedCodexAccount(ctx context.Context, label, refreshToken, accountID string) error {
 	providerID, err := s.providerIDByName(ctx, CodexProviderName)
 	if err != nil {
-		return err
+		return fmt.Errorf("resolve codex provider id:\n%w", err)
 	}
 
 	const query = `

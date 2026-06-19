@@ -84,9 +84,9 @@ func run() error {
 	return serve(ctx, cfg, store, routes)
 }
 
-// serve binds the listener, starts the background pruner, runs the HTTP server, and on a shutdown
-// signal drains connections gracefully. It always stops the pruner and waits for it to finish
-// before returning, so no prune query races the deferred pool close.
+// serve binds the listener, starts the background pruner, runs the HTTP server, and registers the
+// supplied routes. On a shutdown signal it drains connections gracefully. It always stops the pruner
+// and waits for it to finish before returning, so no prune query races the deferred pool close.
 func serve(ctx context.Context, cfg config.Config, store *postgres.Store, routes []httpserver.Route) error {
 	listener, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {

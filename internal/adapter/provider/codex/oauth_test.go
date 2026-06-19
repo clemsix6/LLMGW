@@ -43,12 +43,18 @@ func (f *fakeTokenStore) LoadToken(_ context.Context, providerName, account stri
 	return token, nil
 }
 
-// SaveToken stores the token for the given provider name and account label.
+// SaveToken stores the token for the given provider name and account label, preserving the
+// existing ChatGPTAccountID when the incoming token has none — mirroring the real Postgres
+// UPSERT which does not write the chatgpt_account_id column (seed-owned).
 func (f *fakeTokenStore) SaveToken(_ context.Context, providerName, account string, t domain.Token) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	f.tokens[tokenKey{providerName, account}] = t
+	key := tokenKey{providerName, account}
+	if existing, ok := f.tokens[key]; ok && t.ChatGPTAccountID == "" {
+		t.ChatGPTAccountID = existing.ChatGPTAccountID
+	}
+	f.tokens[key] = t
 	return nil
 }
 

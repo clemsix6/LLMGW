@@ -257,7 +257,7 @@ func attemptStreamPost(t *testing.T, ctx context.Context, h *Harness, body []byt
 type chatCompletionChunk struct {
 	Object  string `json:"object"` // Object must be "chat.completion.chunk".
 	Choices []struct {
-		Delta        struct{} `json:"delta"`        // Delta holds incremental content or tool-call fragments.
+		Delta        struct{} `json:"delta"`         // Delta holds incremental content or tool-call fragments.
 		FinishReason *string  `json:"finish_reason"` // FinishReason is non-nil on the final chunk.
 	} `json:"choices"`
 }

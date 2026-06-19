@@ -132,7 +132,8 @@ func (m *tokenManager) doRefresh(ctx context.Context, account string) (string, e
 		return "", err
 	}
 
-	refreshed.ChatGPTAccountID = current.ChatGPTAccountID
+	// SaveToken's UPSERT writes only access_token/refresh_token/expires_at; the account id is
+	// seed-owned and preserved by the targeted UPDATE, so no assignment is needed here.
 	if err := m.store.SaveToken(ctx, m.providerName, account, refreshed); err != nil {
 		return "", fmt.Errorf("persist rotated token for %q:\n%w", account, err)
 	}

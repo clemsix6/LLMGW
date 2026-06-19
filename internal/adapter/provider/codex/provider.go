@@ -129,13 +129,13 @@ func (p *Provider) newRequest(ctx context.Context, accessToken, accountID string
 // MaxOutputTokens, Tools, and ToolChoice are optional and omitted when zero/nil.
 type responsesRequest struct {
 	Model           string         `json:"model"`                       // Model is the requested model id.
-	Instructions    string         `json:"instructions"`                 // Instructions is the Codex system prompt.
-	Input           []responseItem `json:"input"`                        // Input is the conversation items.
-	Store           bool           `json:"store"`                        // Store is always false on the subscription path.
-	Stream          bool           `json:"stream"`                       // Stream is always true on the subscription path.
+	Instructions    string         `json:"instructions"`                // Instructions is the Codex system prompt.
+	Input           []responseItem `json:"input"`                       // Input is the conversation items.
+	Store           bool           `json:"store"`                       // Store is always false on the subscription path.
+	Stream          bool           `json:"stream"`                      // Stream is always true on the subscription path.
 	MaxOutputTokens int            `json:"max_output_tokens,omitempty"` // MaxOutputTokens caps the response length; mapped from max_tokens.
-	Tools           []responseTool `json:"tools,omitempty"`              // Tools is the callable functions list.
-	ToolChoice      any            `json:"tool_choice,omitempty"`        // ToolChoice controls function-selection behaviour.
+	Tools           []responseTool `json:"tools,omitempty"`             // Tools is the callable functions list.
+	ToolChoice      any            `json:"tool_choice,omitempty"`       // ToolChoice controls function-selection behaviour.
 }
 
 // responseItem is one input item in the Responses conversation. Depending on Type it is:

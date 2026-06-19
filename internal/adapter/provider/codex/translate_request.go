@@ -3,6 +3,7 @@ package codex
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 )
 
 // validCodexModels is the set of model ids served by the Codex subscription backend,
@@ -15,11 +16,11 @@ var validCodexModels = map[string]bool{
 
 // chatBody is the full Chat Completions request body parsed for translation.
 type chatBody struct {
-	Model      string    `json:"model"`       // Model is the requested model id.
-	MaxTokens  int       `json:"max_tokens"`  // MaxTokens maps to max_output_tokens in the Responses body.
-	Messages   []chatMsg `json:"messages"`    // Messages is the conversation history to translate into input items.
-	Tools      []chatTool `json:"tools"`      // Tools is the set of callable functions.
-	ToolChoice any       `json:"tool_choice"` // ToolChoice controls which function may be called.
+	Model      string     `json:"model"`       // Model is the requested model id.
+	MaxTokens  int        `json:"max_tokens"`  // MaxTokens maps to max_output_tokens in the Responses body.
+	Messages   []chatMsg  `json:"messages"`    // Messages is the conversation history to translate into input items.
+	Tools      []chatTool `json:"tools"`       // Tools is the set of callable functions.
+	ToolChoice any        `json:"tool_choice"` // ToolChoice controls which function may be called.
 }
 
 // chatMsg is one Chat Completions message.
@@ -89,12 +90,12 @@ func translateRequest(body []byte, instructions string) ([]byte, error) {
 }
 
 // validateModel returns m unchanged when it is a known Codex-served model id, otherwise
-// it returns an error naming the valid set.
+// it returns an *InvalidModelError so the handler surfaces a 400 to the client.
 func validateModel(m string) (string, error) {
 	if validCodexModels[m] {
 		return m, nil
 	}
-	return "", fmt.Errorf("unknown Codex model %q: must be one of gpt-5, gpt-5-codex, gpt-5.5", m)
+	return "", &InvalidModelError{Model: m}
 }
 
 // translateMessages maps every Chat Completions message to one or more Responses input items.
@@ -164,8 +165,13 @@ func translateToolCall(tc chatToolCall) responseItem {
 }
 
 // translateToolResult maps a tool-role message to a function_call_output input item.
+// Non-string content (e.g. a content-part array) is not supported by Codex; it is dropped
+// and a diagnostic log line is emitted so operators can detect the gap.
 func translateToolResult(msg chatMsg) []responseItem {
-	output, _ := parseStringContent(msg.Content)
+	output, ok := parseStringContent(msg.Content)
+	if !ok {
+		log.Printf("llmgw: codex translate: tool result content dropped (unsupported non-string content for call %q)", msg.ToolCallID)
+	}
 	return []responseItem{{
 		Type:   "function_call_output",
 		CallID: msg.ToolCallID,
@@ -214,6 +220,8 @@ func parseTextContent(raw json.RawMessage, contentType string) ([]responseConten
 	for _, p := range parts {
 		if p.Type == "text" && p.Text != "" {
 			result = append(result, responseContent{Type: contentType, Text: p.Text})
+		} else if p.Type != "text" {
+			log.Printf("llmgw: codex translate: content part of type %q dropped (unsupported multimodal content)", p.Type)
 		}
 	}
 	return result, nil
