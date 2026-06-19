@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/clemsix6/LLMGW/internal/domain/usage"
 )
@@ -20,9 +21,11 @@ type completedEventEnvelope struct {
 
 // responsesCompleted is the shape of the response object inside a response.completed event.
 type responsesCompleted struct {
-	ID     string            `json:"id"`     // ID is the Responses API response identifier.
-	Output []responsesOutput `json:"output"` // Output is the ordered list of output items.
-	Usage  responsesUsage    `json:"usage"`  // Usage holds the token counts for the call.
+	ID        string            `json:"id"`         // ID is the Responses API response identifier.
+	Model     string            `json:"model"`      // Model is the model identifier from the response.
+	CreatedAt int64             `json:"created_at"` // CreatedAt is the Unix timestamp of response creation; 0 if absent.
+	Output    []responsesOutput `json:"output"`     // Output is the ordered list of output items.
+	Usage     responsesUsage    `json:"usage"`      // Usage holds the token counts for the call.
 }
 
 // responsesOutput is one item in the Responses API output array. The Type field determines
@@ -54,6 +57,8 @@ type responsesUsage struct {
 type chatCompletion struct {
 	ID      string              `json:"id"`      // ID is derived from the Responses response id.
 	Object  string              `json:"object"`  // Object is always "chat.completion".
+	Model   string              `json:"model"`   // Model is the model identifier echoed from the Responses response.
+	Created int64               `json:"created"` // Created is the Unix timestamp of the response.
 	Choices []chatChoice        `json:"choices"` // Choices holds the single translated choice.
 	Usage   chatCompletionUsage `json:"usage"`   // Usage maps Responses token counts to Chat Completions names.
 }
@@ -79,32 +84,47 @@ type chatCompletionUsage struct {
 	TotalTokens      int `json:"total_tokens"`      // TotalTokens is the sum of input and output tokens.
 }
 
-// aggregateCompleted scans the Responses SSE stream and returns the raw JSON of the response
-// object from the response.completed event. All preceding events are discarded; the function
-// errors if the event is not found before the stream ends.
+// aggregateCompleted reads the Responses SSE stream using an unbounded bufio.Reader (no 64 KB
+// line limit) and returns the raw JSON of the response object from the response.completed event.
+// All preceding events are discarded; the function errors if the event is not found before EOF.
 func aggregateCompleted(upstream io.Reader) ([]byte, error) {
-	scanner := bufio.NewScanner(upstream)
-	for scanner.Scan() {
-		data, ok := sseDataBytes(scanner.Bytes())
-		if !ok {
-			continue
+	reader := bufio.NewReader(upstream)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			result, scanErr := scanCompletedLine(line)
+			if scanErr != nil {
+				return nil, scanErr
+			}
+			if result != nil {
+				return result, nil
+			}
 		}
-		var env completedEventEnvelope
-		if err := json.Unmarshal(data, &env); err != nil {
-			continue // skip non-JSON lines ([DONE], keep-alive comments, etc.)
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("read SSE stream:\n%w", err)
 		}
-		if env.Type != "response.completed" {
-			continue
-		}
-		if len(env.Response) == 0 {
-			return nil, fmt.Errorf("response.completed event carries no response object")
-		}
-		return env.Response, nil
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scan SSE stream:\n%w", err)
 	}
 	return nil, fmt.Errorf("response.completed event not found in upstream SSE")
+}
+
+// scanCompletedLine checks whether line is a response.completed SSE data line and returns
+// its embedded response JSON. Returns (nil, nil) for non-matching lines.
+func scanCompletedLine(line []byte) ([]byte, error) {
+	data, ok := sseDataBytes(line)
+	if !ok {
+		return nil, nil
+	}
+	var env completedEventEnvelope
+	if err := json.Unmarshal(data, &env); err != nil || env.Type != "response.completed" {
+		return nil, nil
+	}
+	if len(env.Response) == 0 {
+		return nil, fmt.Errorf("response.completed event carries no response object")
+	}
+	return env.Response, nil
 }
 
 // sseDataBytes extracts the JSON payload from an SSE "data:" line, reporting false for
@@ -128,7 +148,11 @@ func translateResponse(completed []byte) ([]byte, usage.Usage, error) {
 	}
 	content, toolCalls := foldOutput(resp.Output)
 	u := usage.Usage{InputTokens: resp.Usage.InputTokens, OutputTokens: resp.Usage.OutputTokens}
-	cc := buildChatCompletion(resp.ID, content, toolCalls, u)
+	created := resp.CreatedAt
+	if created == 0 {
+		created = time.Now().Unix()
+	}
+	cc := buildChatCompletion(resp.ID, resp.Model, created, content, toolCalls, u)
 	out, err := json.Marshal(cc)
 	if err != nil {
 		return nil, usage.Usage{}, fmt.Errorf("encode chat completion:\n%w", err)
@@ -167,14 +191,16 @@ func foldOutput(output []responsesOutput) (*string, []chatToolCall) {
 }
 
 // buildChatCompletion assembles the Chat Completions response object from its translated parts.
-func buildChatCompletion(respID string, content *string, toolCalls []chatToolCall, u usage.Usage) chatCompletion {
+func buildChatCompletion(respID, model string, created int64, content *string, toolCalls []chatToolCall, u usage.Usage) chatCompletion {
 	finishReason := "stop"
 	if len(toolCalls) > 0 {
 		finishReason = "tool_calls"
 	}
 	return chatCompletion{
-		ID:     "chatcmpl-" + respID,
-		Object: "chat.completion",
+		ID:      "chatcmpl-" + respID,
+		Object:  "chat.completion",
+		Model:   model,
+		Created: created,
 		Choices: []chatChoice{{
 			Index: 0,
 			Message: chatCompletionMessage{

@@ -5,12 +5,13 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 // TestTranslateResponseFoldsAndMapsUsage is the canonical test from the task brief: a captured
 // response.completed payload must produce a valid chat.completion, must not leak reasoning
-// items, and must carry non-zero usage from the Responses usage block.
+// items, carry non-zero usage, and include model and created fields.
 func TestTranslateResponseFoldsAndMapsUsage(t *testing.T) {
 	body := readTestdata(t, "responses_completed.json")
 	out, u, err := translateResponse(body)
@@ -21,6 +22,12 @@ func TestTranslateResponseFoldsAndMapsUsage(t *testing.T) {
 	_ = json.Unmarshal(out, &cc)
 	if cc["object"] != "chat.completion" || u.InputTokens == 0 || u.OutputTokens == 0 {
 		t.Fatalf("bad translation: object=%v usage=%+v", cc["object"], u)
+	}
+	if cc["model"] != "gpt-5" {
+		t.Fatalf("expected model=gpt-5, got %v", cc["model"])
+	}
+	if cc["created"] == nil {
+		t.Fatalf("expected created to be present in chat.completion")
 	}
 	assertNoReasoningLeaked(t, out)
 }
@@ -99,6 +106,37 @@ func TestAggregateCompletedMissingEvent(t *testing.T) {
 	_, err := aggregateCompleted(bytes.NewReader(sse))
 	if err == nil {
 		t.Fatal("expected error when response.completed is absent")
+	}
+}
+
+// TestAggregateCompletedLargeEvent verifies that aggregateCompleted handles a
+// response.completed SSE data: line larger than 64 KB — the bufio.Scanner limit that the old
+// implementation silently violated. This test MUST fail against the old Scanner code
+// (scanner.Err() returns bufio.ErrTooLong) and pass with the ReadBytes fix.
+func TestAggregateCompletedLargeEvent(t *testing.T) {
+	filler := strings.Repeat("x", 80*1024) // 80 KB padding, well above the 64 KB Scanner cap
+	respJSON, _ := json.Marshal(map[string]any{
+		"id":           "resp_large",
+		"output":       []any{},
+		"usage":        map[string]any{"input_tokens": 1, "output_tokens": 1},
+		"instructions": filler,
+	})
+	eventJSON, _ := json.Marshal(map[string]any{
+		"type":     "response.completed",
+		"response": json.RawMessage(respJSON),
+	})
+	sse := "data: " + string(eventJSON) + "\n\ndata: [DONE]\n"
+
+	completed, err := aggregateCompleted(strings.NewReader(sse))
+	if err != nil {
+		t.Fatalf("aggregateCompleted failed on >64KB event: %v", err)
+	}
+	var r map[string]any
+	if err := json.Unmarshal(completed, &r); err != nil {
+		t.Fatalf("result is not valid JSON: %v", err)
+	}
+	if r["id"] != "resp_large" {
+		t.Fatalf("expected id=resp_large, got %v", r["id"])
 	}
 }
 
