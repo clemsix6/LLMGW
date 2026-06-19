@@ -67,17 +67,19 @@ mapping) is generic. We exploit that:
    ```go
    // Request is the wire-agnostic view the gateway needs to meter and route a call.
    type Request interface {
-       Model() string   // Model is the requested model id, for usage rows and routing.
-       Stream() bool    // Stream reports whether the consumer asked for SSE.
-       Body() []byte    // Body is the raw client request, parsed by the provider's wire.
+       Model() string  // Model is the requested model id, for usage rows and routing.
+       Stream() bool   // Stream reports whether the consumer asked for SSE.
+       Bytes() []byte  // Bytes is the raw client request body, parsed by the provider.
    }
    ```
 
-   `llm.ChatRequest` (Anthropic) already satisfies `Model`/`Stream`; it gains `Body()`.
-   Each provider re-parses `Body()` in **its own** wire — `claudemax` into the Anthropic
-   shape it already uses (`Normalize`, `FirstUserText`, the Claude Code block), `codex` into
-   Chat Completions for translation. The double parse is negligible and keeps providers
-   fully decoupled (no cross-wire type assertions).
+   The HTTP wire does a **light** parse (just `model` + `stream`) to satisfy this interface
+   and carries the raw body; it never builds a full provider request and never imports a
+   provider package. Each provider does the **single full** parse of `Bytes()` in its own
+   wire — `claudemax` via `llm.ParseRequest` (Anthropic: `Normalize`, `FirstUserText`, the
+   Claude Code block), `codex` into Chat Completions for translation. So there is no full
+   double-parse, no cross-wire type assertion, and the domain never learns the OpenAI wire
+   (it stays inside `codex`).
 
 2. **Generic handler.** `messagesHandler` becomes a small generic handler parameterised by
    `(wire, provider)`, where `wire` parses a body into a `Request` and tags the default
@@ -90,12 +92,43 @@ mapping) is generic. We exploit that:
    dropped — it doesn't generalise to two surfaces and isn't needed once providers are wired
    per route.
 
-4. **New isolated package** `internal/adapter/provider/codex` — OAuth/refresh, the Codex
-   header spoof, the translation layer, and its own account pool. No changes to `claudemax`
-   beyond the `Body()` method and the `Send` signature.
+4. **Shared provider-error contract.** The handler must map either provider's failures to
+   HTTP without knowing concrete types. Today `writeProviderError` type-asserts five
+   **concrete** `claudemax` error types (`messages.go:234-267`) and `httpserver` imports
+   `claudemax` — so a second provider's errors would all fall through to `500` (no
+   `503`/`502`/`Retry-After`, clients never back off). We introduce a domain interface both
+   providers implement:
 
-Result: one gateway logic, two thin wire adapters, two providers. A future third provider
-(e.g. OpenRouter via API key) is a third `(wire, provider)` pair — nothing else moves.
+   ```go
+   // ProviderError is a provider failure the gateway maps to HTTP without knowing the
+   // concrete provider. RetryAfter's bool is false when no Retry-After header applies.
+   type ProviderError interface {
+       error
+       HTTPStatus() int                    // HTTPStatus is the status to send the client.
+       ErrorType() string                  // ErrorType is the stable machine-readable type.
+       RetryAfter() (time.Duration, bool)  // RetryAfter is the backoff when one is known.
+   }
+   ```
+
+   `writeProviderError` collapses to a single `errors.As(err, &provErr)`; `httpserver` stops
+   importing `claudemax`. This unblocks the second provider AND removes the duplicated
+   five-way type switch.
+
+5. **Per-provider store scoping, resolved once.** Account/token access
+   (`LoadAccounts`/`SetCooldown`/`LoadToken`/`SaveToken`) is currently bound to the single
+   default provider (`defaultProviderID`, **uncached**, queried on every call). Each method
+   gains a `providerName`; each provider **resolves its provider id once in `New()`** and
+   reuses it, so scoping adds no per-request DB round-trips. `DefaultRoute` /
+   `SetDefaultProvider` are removed.
+
+6. **New isolated package** `internal/adapter/provider/codex` — OAuth/refresh, the Codex
+   header spoof, the translation layer, and its own account pool. `claudemax` changes are
+   limited to the `Send` signature, the `providerName` plumbing, and implementing
+   `ProviderError` on its error types.
+
+Result: one gateway logic, two thin wire adapters, two providers, one error contract. A
+future third provider (e.g. OpenRouter via API key) is a third `(wire, provider)` pair —
+nothing else moves.
 
 ## 5. The `codex` provider
 
@@ -113,11 +146,14 @@ Result: one gateway logic, two thin wire adapters, two providers. A future third
 - **Body constraints:** `store: false` is forced (any other value is rejected); requests are
   always sent with `stream: true` upstream and re-buffered when the client asked for a
   non-streaming response (simpler than supporting both upstream modes).
-- **`instructions`:** a **minimal** Codex system prompt (the smallest value that satisfies
-  the backend's validity check, well under the ~32 KiB cap). This is the unavoidable
-  injection — but it lives in the Responses `instructions` field, **separate** from the
-  conversation, and the client's own system message goes into `input` (see 5.2). It never
-  reaches the client.
+- **`instructions`:** the Codex system prompt. We try the **smallest** value that passes the
+  backend's validity check first; if the backend rejects it (ChatMock and other proxies ship
+  a full `prompt_gpt5_codex.md`, a strong signal a too-thin value is refused), we **fall back
+  to embedding the real Codex prompt**, pinned in the package, under the ~32 KiB cap. Which
+  one is required is settled during the Phase-2 capture. Either way this is the unavoidable
+  injection (the analogue of the Claude Code spoof) — but it lives in the Responses
+  `instructions` field, **separate** from the conversation (the client's own system message
+  goes into `input`, see 5.2), and it never reaches the client.
 
 ### 5.2 Request translation (Chat Completions → Responses)
 
@@ -168,8 +204,11 @@ Upstream status → typed error → failover decision (mirrors `cooldownFor`):
 | other `4xx` | `UpstreamError` | surface to client unchanged (request-level) |
 | all accounts cooling | `AllCoolingError` | `503` + `Retry-After` |
 
-Client-facing errors are emitted in the **OpenAI error envelope** (`{"error":{...}}`), not
-the Anthropic-style one, so OpenAI SDKs parse them.
+Each codex error type implements `ProviderError` (§4), so the shared `writeProviderError`
+maps it with **no codex-specific code in the handler**. The JSON error envelope stays a
+**single shared shape**, extended to `{"error":{"message","type","code","param"}}` (the
+existing `type`/`message` plus nullable `code`/`param`) — parseable by both OpenAI and
+Anthropic SDKs, so no per-route envelope is needed.
 
 ## 6. Budget & usage (reused as-is)
 
@@ -240,6 +279,12 @@ Chat Completions structure, non-empty plausible content, correct `finish_reason`
 `tool_calls` when tools are used), never exact text. Retry transient upstream errors; never
 retry the gateway's own `402`/`503`.
 
+Because a ChatGPT subscription's rate limits are tighter than Claude Max, the real-backend
+tests are kept **deliberately few** — a small smoke set (one non-streaming, one streaming,
+one tools round-trip) to prove the live path — while the bulk of behaviour (translation
+tables, prompt/reasoning filtering, pool/cooldown, budget) is asserted via **domain unit
+tests and the local stub upstream**, which don't burn subscription quota.
+
 - **Non-streaming:** valid Chat Completions object; usage recorded from the real response.
 - **Streaming:** well-formed SSE chunks ending in `[DONE]`; **assert the Codex system prompt
   and reasoning never appear** in the stream (the clean-output guarantee).
@@ -253,9 +298,10 @@ Domain unit tests cover the translation tables (5.2/5.3) deterministically witho
 
 ## 11. Build order (risk-reducing slices)
 
-1. **Port + handler generalisation** (interface `Request`, generic handler, provider
-   injected per route, drop `DefaultRoute`) — `claudemax` keeps passing its existing E2E
-   suite. No behaviour change.
+1. **Port + handler generalisation** (interface `Request`; `ProviderError` contract +
+   error-mapping refactor; provider-scoped store resolved once in `New()`; generic handler;
+   provider injected per route; drop `DefaultRoute`) — `claudemax` keeps passing its existing
+   E2E suite. No behaviour change.
 2. **`codex` skeleton**: OAuth refresh + single-account spoofed call to the Responses
    backend, non-streaming, minimal `instructions`. Proves the spoof end to end.
 3. **Translation**: request + non-streaming response, then the streaming translator
