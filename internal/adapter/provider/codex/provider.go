@@ -134,28 +134,45 @@ func (p *Provider) buildRequest(ctx context.Context, accessToken, accountID stri
 	return httpReq, nil
 }
 
-// responsesRequest is the minimal Codex Responses body the skeleton sends. store:false and
-// stream:true are required by the subscription surface; instructions carries the Codex system
-// prompt candidate.
+// responsesRequest is the Codex Responses request body. store:false and stream:true are
+// required by the subscription surface; instructions carries the Codex system prompt.
+// MaxOutputTokens, Tools, and ToolChoice are optional and omitted when zero/nil.
 type responsesRequest struct {
-	Model        string         `json:"model"`        // Model is the requested model id.
-	Instructions string         `json:"instructions"` // Instructions is the Codex system prompt.
-	Input        []responseItem `json:"input"`        // Input is the conversation, a single user message here.
-	Store        bool           `json:"store"`        // Store is always false on the subscription path.
-	Stream       bool           `json:"stream"`       // Stream is always true on the subscription path.
+	Model           string         `json:"model"`                       // Model is the requested model id.
+	Instructions    string         `json:"instructions"`                 // Instructions is the Codex system prompt.
+	Input           []responseItem `json:"input"`                        // Input is the conversation items.
+	Store           bool           `json:"store"`                        // Store is always false on the subscription path.
+	Stream          bool           `json:"stream"`                       // Stream is always true on the subscription path.
+	MaxOutputTokens int            `json:"max_output_tokens,omitempty"` // MaxOutputTokens caps the response length; mapped from max_tokens.
+	Tools           []responseTool `json:"tools,omitempty"`              // Tools is the callable functions list.
+	ToolChoice      any            `json:"tool_choice,omitempty"`        // ToolChoice controls function-selection behaviour.
 }
 
-// responseItem is one input item: a message with typed content parts.
+// responseItem is one input item in the Responses conversation. Depending on Type it is:
+// a "message" (Role+Content), a "function_call" (CallID+Name+Arguments), or a
+// "function_call_output" (CallID+Output).
 type responseItem struct {
-	Type    string            `json:"type"`    // Type is the item type ("message").
-	Role    string            `json:"role"`    // Role is the speaker ("user").
-	Content []responseContent `json:"content"` // Content is the typed content parts.
+	Type      string            `json:"type"`                // Type is the item type.
+	Role      string            `json:"role,omitempty"`      // Role is the speaker for message items.
+	Content   []responseContent `json:"content,omitempty"`   // Content is the typed parts for message items.
+	CallID    string            `json:"call_id,omitempty"`   // CallID links a function_call to its function_call_output.
+	Name      string            `json:"name,omitempty"`      // Name is the function name for function_call items.
+	Arguments string            `json:"arguments,omitempty"` // Arguments is the JSON arguments string for function_call items.
+	Output    string            `json:"output,omitempty"`    // Output is the function result for function_call_output items.
 }
 
 // responseContent is one typed content part of an input message.
 type responseContent struct {
-	Type string `json:"type"` // Type is the content type ("input_text").
+	Type string `json:"type"` // Type is the content type ("input_text" or "output_text").
 	Text string `json:"text"` // Text is the message text.
+}
+
+// responseTool is a callable function in the Responses API tools array.
+type responseTool struct {
+	Type        string          `json:"type"`                  // Type is always "function".
+	Name        string          `json:"name"`                  // Name is the function identifier.
+	Description string          `json:"description,omitempty"` // Description explains what the function does.
+	Parameters  json.RawMessage `json:"parameters,omitempty"`  // Parameters is the JSON Schema for function arguments.
 }
 
 // probeBody builds the hardcoded minimal Responses request proving the subscription path.
