@@ -137,3 +137,40 @@ func assertInputContainsType(t *testing.T, input []any, itemType string) {
 	}
 	t.Fatalf("no input item with type %q", itemType)
 }
+
+// TestTranslateToolChoiceFlattensFunction verifies a forced-function tool_choice is flattened
+// from the Chat Completions nested form to the Responses {type:function, name} shape the backend
+// requires (it rejects the nested form with "Missing required parameter: tool_choice.name").
+func TestTranslateToolChoiceFlattensFunction(t *testing.T) {
+	in := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}],"tool_choice":{"type":"function","function":{"name":"get_weather"}}}`)
+	out, err := translateRequest(in, "X")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+	tc, ok := got["tool_choice"].(map[string]any)
+	if !ok {
+		t.Fatalf("tool_choice not an object: %v", got["tool_choice"])
+	}
+	if tc["type"] != "function" || tc["name"] != "get_weather" {
+		t.Fatalf("tool_choice = %v, want {type:function, name:get_weather}", tc)
+	}
+	if _, nested := tc["function"]; nested {
+		t.Fatal("tool_choice still carries a nested function object (the backend rejects it)")
+	}
+}
+
+// TestTranslateToolChoicePassThrough verifies a string tool_choice ("auto") passes through unchanged.
+func TestTranslateToolChoicePassThrough(t *testing.T) {
+	in := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}],"tool_choice":"auto"}`)
+	out, err := translateRequest(in, "X")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+	if got["tool_choice"] != "auto" {
+		t.Fatalf("tool_choice = %v, want \"auto\"", got["tool_choice"])
+	}
+}

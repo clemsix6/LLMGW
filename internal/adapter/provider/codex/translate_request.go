@@ -80,7 +80,7 @@ func translateRequest(body []byte, instructions string) ([]byte, error) {
 		Store:        false,
 		Stream:       true,
 		Tools:        translateTools(cc.Tools),
-		ToolChoice:   cc.ToolChoice,
+		ToolChoice:   translateToolChoice(cc.ToolChoice),
 	}
 	out, err := json.Marshal(req)
 	if err != nil {
@@ -195,6 +195,22 @@ func translateTools(tools []chatTool) []responseTool {
 		})
 	}
 	return out
+}
+
+// translateToolChoice maps a Chat Completions tool_choice to the Responses shape. The string
+// forms ("auto"/"none"/"required") and nil pass through unchanged; the forced-function object
+// {type:"function", function:{name}} is flattened to the Responses {type:"function", name} —
+// the backend rejects the nested Chat Completions form ("Missing required parameter: tool_choice.name").
+func translateToolChoice(tc any) any {
+	m, ok := tc.(map[string]any)
+	if !ok {
+		return tc // nil or a string form ("auto"/"none"/"required")
+	}
+	fn, ok := m["function"].(map[string]any)
+	if !ok {
+		return tc // already flat or an unrecognised shape
+	}
+	return map[string]any{"type": m["type"], "name": fn["name"]}
 }
 
 // parseTextContent parses a raw JSON content value (string or content-part array) into
