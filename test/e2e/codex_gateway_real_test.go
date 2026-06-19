@@ -69,7 +69,7 @@ func startCodexGatewayHarness(t *testing.T, ctx context.Context, refreshToken, a
 func postChatCompletionsWithRetry(t *testing.T, ctx context.Context, h *Harness) []byte {
 	t.Helper()
 
-	const body = `{"model":"gpt-5-codex","max_tokens":16,"messages":[{"role":"user","content":"Reply with a single word."}]}`
+	const body = `{"model":"gpt-5.5","max_tokens":1024,"messages":[{"role":"user","content":"Reply with a single word."}]}`
 	headers := map[string]string{
 		"Content-Type": "application/json",
 		"X-Project":    codexGatewayProject,
@@ -207,7 +207,7 @@ func TestCodexGatewayRealToolCall(t *testing.T) {
 func postCodexStreamWithRetry(t *testing.T, ctx context.Context, h *Harness) string {
 	t.Helper()
 
-	const body = `{"model":"gpt-5-codex","max_tokens":16,"stream":true,"messages":[{"role":"user","content":"Reply with a single word."}]}`
+	const body = `{"model":"gpt-5.5","max_tokens":1024,"stream":true,"messages":[{"role":"user","content":"Reply with a single word."}]}`
 	headers := map[string]string{
 		"Content-Type": "application/json",
 		"X-Project":    codexGatewayProject,
@@ -297,7 +297,7 @@ func assertPlausibleCodexStream(t *testing.T, raw string) {
 func postCodexToolCallWithRetry(t *testing.T, ctx context.Context, h *Harness) []byte {
 	t.Helper()
 
-	const body = `{"model":"gpt-5-codex","max_tokens":64,"messages":[{"role":"user","content":"What is the weather in Paris?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Get the current weather","parameters":{"type":"object","properties":{"location":{"type":"string","description":"City name"}},"required":["location"]}}}],"tool_choice":{"type":"function","function":{"name":"get_weather"}}}`
+	const body = `{"model":"gpt-5.5","max_tokens":1024,"messages":[{"role":"user","content":"What is the weather in Paris?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Get the current weather","parameters":{"type":"object","properties":{"location":{"type":"string","description":"City name"}},"required":["location"]}}}],"tool_choice":{"type":"function","function":{"name":"get_weather"}}}`
 	headers := map[string]string{
 		"Content-Type": "application/json",
 		"X-Project":    codexGatewayProject,

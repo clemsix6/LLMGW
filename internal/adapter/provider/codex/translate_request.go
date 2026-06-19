@@ -6,18 +6,17 @@ import (
 	"log"
 )
 
-// validCodexModels is the set of model ids served by the Codex subscription backend,
-// seeded in migration 0008. Unknown models are rejected at translation time.
+// validCodexModels is the set of model ids the Codex ChatGPT-account backend actually serves
+// (verified live: gpt-5 and gpt-5-codex are rejected as "not supported when using Codex with a
+// ChatGPT account"). Unknown models are rejected at translation time.
 var validCodexModels = map[string]bool{
-	"gpt-5":       true,
-	"gpt-5-codex": true,
-	"gpt-5.5":     true,
+	"gpt-5.5": true,
 }
 
 // chatBody is the full Chat Completions request body parsed for translation.
 type chatBody struct {
 	Model      string     `json:"model"`       // Model is the requested model id.
-	MaxTokens  int        `json:"max_tokens"`  // MaxTokens maps to max_output_tokens in the Responses body.
+	MaxTokens  int        `json:"max_tokens"`  // MaxTokens is parsed but not forwarded: the backend rejects max_output_tokens.
 	Messages   []chatMsg  `json:"messages"`    // Messages is the conversation history to translate into input items.
 	Tools      []chatTool `json:"tools"`       // Tools is the set of callable functions.
 	ToolChoice any        `json:"tool_choice"` // ToolChoice controls which function may be called.
@@ -72,15 +71,16 @@ func translateRequest(body []byte, instructions string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The Codex backend rejects max_output_tokens, so the client's max_tokens is not
+	// forwarded; the model generates to its own stop.
 	req := responsesRequest{
-		Model:           model,
-		Instructions:    instructions,
-		Input:           input,
-		Store:           false,
-		Stream:          true,
-		MaxOutputTokens: cc.MaxTokens,
-		Tools:           translateTools(cc.Tools),
-		ToolChoice:      cc.ToolChoice,
+		Model:        model,
+		Instructions: instructions,
+		Input:        input,
+		Store:        false,
+		Stream:       true,
+		Tools:        translateTools(cc.Tools),
+		ToolChoice:   cc.ToolChoice,
 	}
 	out, err := json.Marshal(req)
 	if err != nil {
