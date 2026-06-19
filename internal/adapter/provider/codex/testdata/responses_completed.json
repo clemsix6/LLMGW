@@ -2,7 +2,7 @@
   "id": "resp_abc123",
   "object": "response",
   "status": "completed",
-  "model": "gpt-5",
+  "model": "gpt-5.5",
   "output": [
     {
       "type": "reasoning",

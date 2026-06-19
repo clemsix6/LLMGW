@@ -127,7 +127,7 @@ func TestRelayTranslatedStreamLargeCreatedEvent(t *testing.T) {
 		"type": "response.created",
 		"response": map[string]any{
 			"id":           "resp_large",
-			"model":        "gpt-5",
+			"model":        "gpt-5.5",
 			"instructions": filler,
 		},
 	})
@@ -135,7 +135,7 @@ func TestRelayTranslatedStreamLargeCreatedEvent(t *testing.T) {
 		"type": "response.completed",
 		"response": map[string]any{
 			"id":     "resp_large",
-			"model":  "gpt-5",
+			"model":  "gpt-5.5",
 			"output": []any{},
 			"usage":  map[string]any{"input_tokens": 1, "output_tokens": 1},
 		},

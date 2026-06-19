@@ -7,11 +7,11 @@ import (
 	"testing"
 )
 
-// TestTranslateRequestMapsCoreFields is the canonical failing test from the task brief.
-// It asserts that translateRequest produces store:false, max_output_tokens mapped,
-// instructions set, a developer input item, and a function tool.
+// TestTranslateRequestMapsCoreFields verifies that translateRequest produces
+// store:false, no max_output_tokens (backend rejects it), instructions set,
+// a developer input item, and a function tool.
 func TestTranslateRequestMapsCoreFields(t *testing.T) {
-	in := []byte(`{"model":"gpt-5","max_tokens":256,"messages":[
+	in := []byte(`{"model":"gpt-5.5","max_tokens":256,"messages":[
 		{"role":"system","content":"be terse"},{"role":"user","content":"hi"}],
 		"tools":[{"type":"function","function":{"name":"f","parameters":{}}}]}`)
 	out, err := translateRequest(in, "CODEX_MIN")
@@ -20,8 +20,11 @@ func TestTranslateRequestMapsCoreFields(t *testing.T) {
 	}
 	var got map[string]any
 	_ = json.Unmarshal(out, &got)
-	if got["store"] != false || got["max_output_tokens"].(float64) != 256 || got["instructions"] != "CODEX_MIN" {
+	if got["store"] != false || got["instructions"] != "CODEX_MIN" {
 		t.Fatalf("core fields wrong: %v", got)
+	}
+	if _, ok := got["max_output_tokens"]; ok {
+		t.Fatal("max_output_tokens must not be sent — backend rejects it")
 	}
 	assertHasDeveloperInput(t, got)
 	assertHasFunctionTool(t, got)
@@ -31,7 +34,7 @@ func TestTranslateRequestMapsCoreFields(t *testing.T) {
 // function_call input items and that a following tool-role message becomes
 // a function_call_output item.
 func TestTranslateRequestAssistantToolCall(t *testing.T) {
-	in := []byte(`{"model":"gpt-5","messages":[
+	in := []byte(`{"model":"gpt-5.5","messages":[
 		{"role":"user","content":"call f"},
 		{"role":"assistant","content":null,"tool_calls":[
 			{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},
@@ -67,7 +70,7 @@ func TestTranslateRequestInvalidModel(t *testing.T) {
 
 // TestTranslateRequestStreamForced verifies that the output always has stream:true.
 func TestTranslateRequestStreamForced(t *testing.T) {
-	in := []byte(`{"model":"gpt-5","stream":false,"messages":[{"role":"user","content":"hi"}]}`)
+	in := []byte(`{"model":"gpt-5.5","stream":false,"messages":[{"role":"user","content":"hi"}]}`)
 	out, err := translateRequest(in, "inst")
 	if err != nil {
 		t.Fatal(err)

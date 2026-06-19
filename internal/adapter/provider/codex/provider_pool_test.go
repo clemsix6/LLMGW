@@ -33,7 +33,7 @@ import (
 // accounts. It contains a response.completed event with input_tokens=5, output_tokens=3 and a
 // single text output item so both the non-streaming (aggregation) and streaming paths can use it.
 const cannedResponsesStream = "event: response.created\n" +
-	`data: {"type":"response.created","response":{"id":"resp_stub","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-5"}}` + "\n\n" +
+	`data: {"type":"response.created","response":{"id":"resp_stub","object":"response","created_at":1700000000,"status":"in_progress","model":"gpt-5.5"}}` + "\n\n" +
 	"event: response.output_item.added\n" +
 	`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_001","role":"assistant"}}` + "\n\n" +
 	"event: response.output_text.delta\n" +
@@ -43,7 +43,7 @@ const cannedResponsesStream = "event: response.created\n" +
 	"event: response.output_item.done\n" +
 	`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_001","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}` + "\n\n" +
 	"event: response.completed\n" +
-	`data: {"type":"response.completed","response":{"id":"resp_stub","object":"response","created_at":1700000000,"status":"completed","model":"gpt-5","output":[{"type":"message","id":"msg_001","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}` + "\n\n" +
+	`data: {"type":"response.completed","response":{"id":"resp_stub","object":"response","created_at":1700000000,"status":"completed","model":"gpt-5.5","output":[{"type":"message","id":"msg_001","status":"completed","role":"assistant","content":[{"type":"output_text","text":"ok"}]}],"usage":{"input_tokens":5,"output_tokens":3,"total_tokens":8}}}` + "\n\n" +
 	"data: [DONE]\n\n"
 
 // TestCodexProviderPool runs the pool's cooldown/rotation scenarios against one Postgres container,
@@ -369,7 +369,7 @@ func codexPoolProvider(store accountStore, baseURL string) *Provider {
 func codexPoolRequest(t *testing.T, stream bool) llm.Request {
 	t.Helper()
 
-	body := `{"model":"gpt-5","max_tokens":16,"stream":` + strconv.FormatBool(stream) +
+	body := `{"model":"gpt-5.5","max_tokens":16,"stream":` + strconv.FormatBool(stream) +
 		`,"messages":[{"role":"user","content":"hi"}]}`
 	req, err := llm.ParseRequest([]byte(body))
 	if err != nil {

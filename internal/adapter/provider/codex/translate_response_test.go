@@ -23,8 +23,8 @@ func TestTranslateResponseFoldsAndMapsUsage(t *testing.T) {
 	if cc["object"] != "chat.completion" || u.InputTokens == 0 || u.OutputTokens == 0 {
 		t.Fatalf("bad translation: object=%v usage=%+v", cc["object"], u)
 	}
-	if cc["model"] != "gpt-5" {
-		t.Fatalf("expected model=gpt-5, got %v", cc["model"])
+	if cc["model"] != "gpt-5.5" {
+		t.Fatalf("expected model=gpt-5.5, got %v", cc["model"])
 	}
 	if cc["created"] == nil {
 		t.Fatalf("expected created to be present in chat.completion")
