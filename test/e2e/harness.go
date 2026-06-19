@@ -15,6 +15,7 @@ import (
 	"github.com/clemsix6/LLMGW/internal/adapter/httpserver"
 	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
 	"github.com/clemsix6/LLMGW/internal/adapter/provider/claudemax"
+	"github.com/clemsix6/LLMGW/internal/adapter/provider/codex"
 	"github.com/clemsix6/LLMGW/internal/domain"
 )
 
@@ -118,6 +119,35 @@ func (h *Harness) SeedClaudeMax(ctx context.Context, account string, token domai
 		Provider:     claude,
 		Wire:         httpserver.AnthropicWire{},
 		ProviderName: postgres.DefaultProviderName,
+	}}
+	h.server = httpserver.New(h.store, "", routes)
+	go func() { _ = h.server.Serve(h.listener) }()
+	return nil
+}
+
+// SeedCodex persists the Codex account credentials and rebuilds the server with the
+// /v1/chat/completions route wired to the codex provider. It replaces the no-route (or
+// previous) server started by Start, so the gateway can forward to the real Codex backend.
+func (h *Harness) SeedCodex(ctx context.Context, account, refreshToken, accountID, version string) error {
+	if err := h.store.SeedCodexAccount(ctx, account, refreshToken, accountID); err != nil {
+		return fmt.Errorf("seed codex account:\n%w", err)
+	}
+
+	_ = h.server.Shutdown(ctx)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return fmt.Errorf("rebind listener:\n%w", err)
+	}
+	h.listener = listener
+	h.BaseURL = "http://" + listener.Addr().String()
+
+	codexProv := codex.New(h.store, version)
+	routes := []httpserver.Route{{
+		Path:         "/v1/chat/completions",
+		Provider:     codexProv,
+		Wire:         httpserver.OpenAIWire{},
+		ProviderName: postgres.CodexProviderName,
 	}}
 	h.server = httpserver.New(h.store, "", routes)
 	go func() { _ = h.server.Serve(h.listener) }()

@@ -13,6 +13,7 @@ import (
 	"github.com/clemsix6/LLMGW/internal/adapter/httpserver"
 	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
 	"github.com/clemsix6/LLMGW/internal/adapter/provider/claudemax"
+	"github.com/clemsix6/LLMGW/internal/adapter/provider/codex"
 	"github.com/clemsix6/LLMGW/internal/config"
 )
 
@@ -64,12 +65,21 @@ func run() error {
 	}
 
 	claude := claudemax.New(store, cfg.ClaudeCodeVersion)
-	routes := []httpserver.Route{{
-		Path:         "/v1/messages",
-		Provider:     claude,
-		Wire:         httpserver.AnthropicWire{},
-		ProviderName: postgres.DefaultProviderName,
-	}}
+	codexProv := codex.New(store, cfg.CodexVersion)
+	routes := []httpserver.Route{
+		{
+			Path:         "/v1/messages",
+			Provider:     claude,
+			Wire:         httpserver.AnthropicWire{},
+			ProviderName: postgres.DefaultProviderName,
+		},
+		{
+			Path:         "/v1/chat/completions",
+			Provider:     codexProv,
+			Wire:         httpserver.OpenAIWire{},
+			ProviderName: postgres.CodexProviderName,
+		},
+	}
 
 	return serve(ctx, cfg, store, routes)
 }
