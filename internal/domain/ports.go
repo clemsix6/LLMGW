@@ -99,6 +99,8 @@ type Token struct {
 
 	SessionKey string // SessionKey is the durable claude.ai cookie that bootstraps OAuth tokens; empty when seeded directly with a refresh token.
 
+	ChatGPTAccountID string // ChatGPTAccountID is the ChatGPT account id the Codex provider sends per request; empty for providers that do not use it.
+
 	ExpiresAt time.Time // ExpiresAt is when AccessToken stops being valid.
 }
 

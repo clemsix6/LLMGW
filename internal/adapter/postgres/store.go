@@ -100,15 +100,15 @@ func (s *Store) LoadToken(ctx context.Context, providerName, account string) (do
 	}
 
 	const query = `
-SELECT access_token, refresh_token, session_key, expires_at
+SELECT access_token, refresh_token, session_key, chatgpt_account_id, expires_at
 FROM oauth_token
 WHERE provider_id = $1 AND account_label = $2`
 
 	var token domain.Token
-	var access, refresh, session *string
+	var access, refresh, session, accountID *string
 	var expires *time.Time
 
-	err = s.pool.QueryRow(ctx, query, providerID, account).Scan(&access, &refresh, &session, &expires)
+	err = s.pool.QueryRow(ctx, query, providerID, account).Scan(&access, &refresh, &session, &accountID, &expires)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Token{}, fmt.Errorf("load token %q:\n%w", account, domain.ErrTokenNotFound)
 	}
@@ -124,6 +124,9 @@ WHERE provider_id = $1 AND account_label = $2`
 	}
 	if session != nil {
 		token.SessionKey = *session
+	}
+	if accountID != nil {
+		token.ChatGPTAccountID = *accountID
 	}
 	if expires != nil {
 		token.ExpiresAt = *expires
