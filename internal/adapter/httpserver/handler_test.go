@@ -35,8 +35,12 @@ func (s *fakeStore) PriceFor(_ context.Context, _ string) (float64, float64, boo
 	return 0, 0, false, nil
 }
 
-// RecordUsage captures the token counts from the event.
-func (s *fakeStore) RecordUsage(_ context.Context, e domain.UsageEvent) error {
+// RecordUsage captures the token counts from the event. It honors the context so the test
+// suite can reproduce a real Postgres write failing on a canceled context.
+func (s *fakeStore) RecordUsage(ctx context.Context, e domain.UsageEvent) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.recorded = usage.Usage{InputTokens: e.InputTokens, OutputTokens: e.OutputTokens}
 	return nil
 }
@@ -78,5 +82,28 @@ func TestHandlerForwardsAndRecords(t *testing.T) {
 
 	if rec.Code != http.StatusOK || store.recorded.OutputTokens != 5 {
 		t.Fatalf("status=%d recorded=%+v", rec.Code, store.recorded)
+	}
+}
+
+// TestHandlerRecordsUsageAfterClientDisconnect verifies that the usage_event is still recorded
+// when the request context is already canceled — the common case where the client (e.g. an agent)
+// closes the connection the instant it has the full response, before the handler records usage.
+// Recording must run on a context detached from request cancellation; otherwise budget tracking
+// silently drops every such call.
+func TestHandlerRecordsUsageAfterClientDisconnect(t *testing.T) {
+	store := &fakeStore{projectID: 7}
+	prov := &fakeProvider{body: []byte(`{"ok":true}`), usage: usage.Usage{InputTokens: 3, OutputTokens: 5}}
+	h := newHandler(store, prov, AnthropicWire{}, "claude-max", "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the client is already gone by the time usage is recorded
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"m","messages":[]}`)).WithContext(ctx)
+	req.Header.Set("X-Project", "p")
+	h.handle(rec, req)
+
+	if store.recorded.OutputTokens != 5 {
+		t.Fatalf("usage not recorded after client disconnect: recorded=%+v", store.recorded)
 	}
 }
