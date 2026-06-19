@@ -57,11 +57,9 @@ func (OpenAIWire) DefaultTag() string {
 	return "agentic"
 }
 
-// rawRequest is a lightweight llm.Request for wires that only need to extract model, stream
-// and the raw body. The provider does the single authoritative full parse of Bytes() in its
-// own wire; rawRequest carries just enough for the handler to route and meter the call.
-// It is used by the OpenAI wire (added in a later task) and defined here so the type is
-// available when that wire is wired in.
+// rawRequest is a lightweight llm.Request used by OpenAIWire to carry a light-parsed request.
+// The provider does the single authoritative full parse of Bytes() in its own translation step;
+// rawRequest carries just enough for the handler to route and meter the call.
 type rawRequest struct {
 	model  string // model is the requested model id extracted from the body.
 	stream bool   // stream reports whether the client asked for an SSE response.
