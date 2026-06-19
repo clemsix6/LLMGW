@@ -123,8 +123,8 @@ func TestProviderPool(t *testing.T) {
 		if !errors.As(err, &allCooling) {
 			t.Fatalf("Send error = %v, want *AllCoolingError", err)
 		}
-		if allCooling.RetryAfter <= 0 || allCooling.RetryAfter > 3*time.Minute {
-			t.Fatalf("RetryAfter = %v, want ~2m (soonest cooldown)", allCooling.RetryAfter)
+		if allCooling.After <= 0 || allCooling.After > 3*time.Minute {
+			t.Fatalf("After = %v, want ~2m (soonest cooldown)", allCooling.After)
 		}
 
 		// A second Send must not touch the upstream: both accounts are cooling and get skipped.

@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/clemsix6/LLMGW/internal/adapter/provider/claudemax"
 	"github.com/clemsix6/LLMGW/internal/domain"
 	"github.com/clemsix6/LLMGW/internal/domain/llm"
 	"github.com/clemsix6/LLMGW/internal/domain/usage"
@@ -227,44 +226,18 @@ func writeSuccess(w http.ResponseWriter, body []byte) {
 	_, _ = w.Write(body)
 }
 
-// writeProviderError maps a provider error to a clean HTTP status: all accounts cooling becomes
-// 503 with a Retry-After, a rate limit 503 (with Retry-After when a reset is known), a dead
-// refresh token 502, an upstream non-2xx its own status, and anything else 500.
+// writeProviderError maps a provider error to a clean HTTP status via the domain.ProviderError
+// contract: the error itself carries the status, type, and optional Retry-After. Anything that
+// does not implement the contract falls back to 500 "internal".
 func writeProviderError(w http.ResponseWriter, err error) {
-	var cooling *claudemax.AllCoolingError
-	if errors.As(err, &cooling) {
-		w.Header().Set("Retry-After", retryAfterDuration(cooling.RetryAfter))
-		writeError(w, http.StatusServiceUnavailable, "all_cooling", cooling.Error())
-		return
-	}
-
-	var rate *claudemax.RateLimitError
-	if errors.As(err, &rate) {
-		if !rate.ResetAt.IsZero() {
-			w.Header().Set("Retry-After", retryAfterSeconds(rate.ResetAt))
+	var pe domain.ProviderError
+	if errors.As(err, &pe) {
+		if d, ok := pe.RetryAfter(); ok {
+			w.Header().Set("Retry-After", retryAfterDuration(d))
 		}
-		writeError(w, http.StatusServiceUnavailable, "rate_limited", rate.Error())
+		writeError(w, pe.HTTPStatus(), pe.ErrorType(), pe.Error())
 		return
 	}
-
-	var dead *claudemax.DeadRefreshTokenError
-	if errors.As(err, &dead) {
-		writeError(w, http.StatusBadGateway, "dead_refresh_token", dead.Error())
-		return
-	}
-
-	var exhausted *claudemax.UsageExhaustedError
-	if errors.As(err, &exhausted) {
-		writeError(w, http.StatusServiceUnavailable, "usage_exhausted", exhausted.Error())
-		return
-	}
-
-	var upstream *claudemax.UpstreamError
-	if errors.As(err, &upstream) {
-		writeError(w, upstreamStatus(upstream.Status), "upstream_error", upstream.Error())
-		return
-	}
-
 	writeError(w, http.StatusInternalServerError, "internal", err.Error())
 }
 
@@ -296,10 +269,15 @@ type errorBody struct {
 }
 
 // errorDetail describes a gateway error: a stable machine-readable type and a human message.
+// Code and Param are nullable OpenAI/Anthropic-compatible fields included when set.
 type errorDetail struct {
 	Type string `json:"type"` // Type is a stable error classifier (e.g. "rate_limited").
 
 	Message string `json:"message"` // Message is a human-readable description.
+
+	Code *string `json:"code,omitempty"` // Code is an optional provider-specific error code.
+
+	Param *string `json:"param,omitempty"` // Param is the request parameter that triggered the error, if any.
 }
 
 // writeError writes a typed JSON error response with the given HTTP status.

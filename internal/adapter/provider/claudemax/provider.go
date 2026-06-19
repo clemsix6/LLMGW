@@ -35,6 +35,20 @@ func (e *RateLimitError) Error() string {
 	return fmt.Sprintf("upstream rate limited until %s", e.ResetAt.Format(time.RFC3339))
 }
 
+// HTTPStatus returns 503 Service Unavailable for a rate limit.
+func (e *RateLimitError) HTTPStatus() int { return 503 }
+
+// ErrorType returns the stable classifier "rate_limited".
+func (e *RateLimitError) ErrorType() string { return "rate_limited" }
+
+// RetryAfter returns the duration until ResetAt when known, otherwise (0, false).
+func (e *RateLimitError) RetryAfter() (time.Duration, bool) {
+	if e.ResetAt.IsZero() {
+		return 0, false
+	}
+	return time.Until(e.ResetAt), true
+}
+
 // UpstreamError reports a non-2xx upstream response other than a rate limit.
 type UpstreamError struct {
 	Status int // Status is the HTTP status code returned by the upstream.
@@ -47,6 +61,20 @@ func (e *UpstreamError) Error() string {
 	return fmt.Sprintf("upstream returned status %d: %s", e.Status, e.Body)
 }
 
+// HTTPStatus echoes the upstream status for 4xx/5xx, falling back to 502 for nonsensical codes.
+func (e *UpstreamError) HTTPStatus() int {
+	if e.Status >= 400 && e.Status <= 599 {
+		return e.Status
+	}
+	return 502
+}
+
+// ErrorType returns the stable classifier "upstream_error".
+func (e *UpstreamError) ErrorType() string { return "upstream_error" }
+
+// RetryAfter returns (0, false); upstream errors carry no retry hint.
+func (e *UpstreamError) RetryAfter() (time.Duration, bool) { return 0, false }
+
 // UsageExhaustedError reports that an account's extra-usage (pay-as-you-go) budget is spent —
 // Anthropic's "out of extra usage" 400. It is account-specific: another account may still serve,
 // so Send cools this account and fails over rather than surfacing the error to the caller.
@@ -56,6 +84,15 @@ type UsageExhaustedError struct{}
 func (e *UsageExhaustedError) Error() string {
 	return "account out of extra usage"
 }
+
+// HTTPStatus returns 503 Service Unavailable; the account's usage budget is spent.
+func (e *UsageExhaustedError) HTTPStatus() int { return 503 }
+
+// ErrorType returns the stable classifier "usage_exhausted".
+func (e *UsageExhaustedError) ErrorType() string { return "usage_exhausted" }
+
+// RetryAfter returns (0, false); no retry hint is available for usage exhaustion.
+func (e *UsageExhaustedError) RetryAfter() (time.Duration, bool) { return 0, false }
 
 // Provider forwards Anthropic Messages requests to Claude Max over OAuth, applying the Claude
 // Code spoof. It holds a pool of accounts (the oauth_token rows) and rotates across them

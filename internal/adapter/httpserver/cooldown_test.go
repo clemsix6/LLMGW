@@ -15,7 +15,7 @@ import (
 func TestWriteProviderErrorAllCooling(t *testing.T) {
 	rec := httptest.NewRecorder()
 
-	writeProviderError(rec, &claudemax.AllCoolingError{RetryAfter: 90 * time.Second})
+	writeProviderError(rec, &claudemax.AllCoolingError{After: 90 * time.Second})
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503", rec.Code)

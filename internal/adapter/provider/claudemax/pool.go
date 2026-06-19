@@ -27,16 +27,25 @@ const (
 )
 
 // AllCoolingError reports that every account in the pool is on cooldown, so no request can be
-// served right now. RetryAfter is the delay until the soonest account becomes available; the
+// served right now. After is the delay until the soonest account becomes available; the
 // handler maps it to a 503 with a Retry-After header.
 type AllCoolingError struct {
-	RetryAfter time.Duration // RetryAfter is the wait until the earliest account's cooldown clears.
+	After time.Duration // After is the wait until the earliest account's cooldown clears.
 }
 
 // Error implements the error interface.
 func (e *AllCoolingError) Error() string {
-	return fmt.Sprintf("all accounts cooling; retry after %s", e.RetryAfter)
+	return fmt.Sprintf("all accounts cooling; retry after %s", e.After)
 }
+
+// HTTPStatus returns 503 Service Unavailable; all accounts are cooling.
+func (e *AllCoolingError) HTTPStatus() int { return 503 }
+
+// ErrorType returns the stable classifier "all_cooling".
+func (e *AllCoolingError) ErrorType() string { return "all_cooling" }
+
+// RetryAfter returns the known backoff duration (always present for AllCoolingError).
+func (e *AllCoolingError) RetryAfter() (time.Duration, bool) { return e.After, true }
 
 // accountStore is the persistence the multi-account provider needs: per-account token access (for
 // the token manager) plus the cooldown state that drives round-robin selection.
@@ -92,10 +101,10 @@ func (p *Provider) cool(ctx context.Context, account string, until time.Time) {
 func (p *Provider) allCooling(ctx context.Context, now time.Time) error {
 	accounts, err := p.store.LoadAccounts(ctx)
 	if err != nil {
-		return &AllCoolingError{RetryAfter: defaultCooldown}
+		return &AllCoolingError{After: defaultCooldown}
 	}
 
-	return &AllCoolingError{RetryAfter: retryAfterUntil(soonestCooldown(accounts), now)}
+	return &AllCoolingError{After: retryAfterUntil(soonestCooldown(accounts), now)}
 }
 
 // soonestCooldown returns the earliest non-zero cooldown_until across the accounts, or the zero

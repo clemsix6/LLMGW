@@ -44,6 +44,15 @@ func (e *DeadRefreshTokenError) Error() string {
 	return fmt.Sprintf("refresh token for account %q is dead (invalid_grant); re-seed required", e.Account)
 }
 
+// HTTPStatus returns 502 Bad Gateway; the upstream credential is dead.
+func (e *DeadRefreshTokenError) HTTPStatus() int { return 502 }
+
+// ErrorType returns the stable classifier "dead_refresh_token".
+func (e *DeadRefreshTokenError) ErrorType() string { return "dead_refresh_token" }
+
+// RetryAfter returns (0, false); no retry hint applies for a dead token.
+func (e *DeadRefreshTokenError) RetryAfter() (time.Duration, bool) { return 0, false }
+
 // tokenStore is the subset of the persistence port the token manager needs.
 type tokenStore interface {
 	// LoadToken returns the persisted token for an account label.
