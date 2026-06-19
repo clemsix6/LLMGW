@@ -26,15 +26,6 @@ const (
 
 	// responsesPath is the path of the Responses endpoint under the base.
 	responsesPath = "/responses"
-
-	// smokeModel is the model the skeleton's hardcoded probe targets; the codex backend serves
-	// the GPT-5 family on the subscription path. Translation (Tasks 9-11) replaces this with the
-	// caller's requested model.
-	smokeModel = "gpt-5"
-
-	// smokePrompt is the tiny user message the skeleton sends to prove the OAuth + spoof path
-	// reaches a 200. It is not the real translated request body.
-	smokePrompt = "Reply with a single word."
 )
 
 // accountStore is the persistence the provider needs: per-account token access (for the token
@@ -46,9 +37,8 @@ type accountStore interface {
 	LoadAccounts(ctx context.Context, providerName string) ([]domain.Account, error)
 }
 
-// Provider forwards requests to the ChatGPT Codex subscription over OAuth, applying the Codex
-// client spoof. For this task it serves a single account and forwards a hardcoded minimal
-// Responses probe to prove the subscription path; translation and account rotation come later.
+// Provider forwards Chat Completions requests to the ChatGPT Codex subscription over OAuth,
+// translating to/from the Responses API and applying the Codex client spoof.
 type Provider struct {
 	tokens *tokenManager // tokens hands out valid OAuth access tokens and the account id.
 
@@ -75,11 +65,10 @@ func New(store accountStore, version string) *Provider {
 	}
 }
 
-// Send forwards a hardcoded minimal Responses request through the first seeded account, proving
-// the OAuth refresh + Codex spoof reach a 200. The caller's req is ignored for this task; on 200
-// the upstream body is relayed verbatim and a zero Usage is returned (metering is added with
-// translation). A non-200 maps to a typed error.
-func (p *Provider) Send(ctx context.Context, _ llm.Request, out domain.StreamSink) (usage.Usage, error) {
+// Send translates the Chat Completions request to the Responses API, calls the Codex backend,
+// and writes the result to out. Non-streaming: the upstream SSE is aggregated and a single
+// chat.completion object is emitted. Streaming is reserved for Task 11.
+func (p *Provider) Send(ctx context.Context, req llm.Request, out domain.StreamSink) (usage.Usage, error) {
 	account, err := p.pickAccount(ctx)
 	if err != nil {
 		return usage.Usage{}, err
@@ -90,7 +79,12 @@ func (p *Provider) Send(ctx context.Context, _ llm.Request, out domain.StreamSin
 		return usage.Usage{}, fmt.Errorf("obtain access token:\n%w", err)
 	}
 
-	httpReq, err := p.buildRequest(ctx, accessToken, accountID)
+	body, err := translateRequest(req.Bytes(), instructions())
+	if err != nil {
+		return usage.Usage{}, fmt.Errorf("translate request:\n%w", err)
+	}
+
+	httpReq, err := p.newRequest(ctx, accessToken, accountID, body)
 	if err != nil {
 		return usage.Usage{}, err
 	}
@@ -101,7 +95,7 @@ func (p *Provider) Send(ctx context.Context, _ llm.Request, out domain.StreamSin
 	}
 	defer resp.Body.Close()
 
-	return handleResponse(resp, out)
+	return p.handleResp(resp, req.Stream(), out)
 }
 
 // pickAccount returns the first seeded account label, the one the skeleton serves. An empty pool
@@ -117,19 +111,13 @@ func (p *Provider) pickAccount(ctx context.Context) (string, error) {
 	return accounts[0].Label, nil
 }
 
-// buildRequest serialises the hardcoded probe body and applies the Codex spoof and bearer token.
-func (p *Provider) buildRequest(ctx context.Context, accessToken, accountID string) (*http.Request, error) {
-	body, err := json.Marshal(probeBody())
-	if err != nil {
-		return nil, fmt.Errorf("encode probe body:\n%w", err)
-	}
-
+// newRequest builds an HTTP request with the translated Responses body and Codex spoof headers.
+func (p *Provider) newRequest(ctx context.Context, accessToken, accountID string, body []byte) (*http.Request, error) {
 	endpoint := p.baseURL + responsesPath
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build responses request:\n%w", err)
 	}
-
 	p.spoof.decorate(httpReq, accessToken, accountID)
 	return httpReq, nil
 }
@@ -175,42 +163,36 @@ type responseTool struct {
 	Parameters  json.RawMessage `json:"parameters,omitempty"`  // Parameters is the JSON Schema for function arguments.
 }
 
-// probeBody builds the hardcoded minimal Responses request proving the subscription path.
-func probeBody() responsesRequest {
-	return responsesRequest{
-		Model:        smokeModel,
-		Instructions: instructions(),
-		Input: []responseItem{{
-			Type:    "message",
-			Role:    "user",
-			Content: []responseContent{{Type: "input_text", Text: smokePrompt}},
-		}},
-		Store:  false,
-		Stream: true,
+// handleResp dispatches the upstream response. Non-200 → typed error; 200 → non-streaming or
+// streaming path depending on stream. The streaming path is reserved for Task 11.
+func (p *Provider) handleResp(resp *http.Response, stream bool, out domain.StreamSink) (usage.Usage, error) {
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return usage.Usage{}, classifyUpstream(resp.StatusCode, resp.Header, body)
 	}
+	if stream {
+		// TODO: Task 11 wires the streaming translator here.
+		return usage.Usage{}, fmt.Errorf("streaming not yet implemented")
+	}
+	return handleNonStreaming(resp.Body, out)
 }
 
-// handleResponse maps the upstream response: 200 relays the body verbatim and returns a zero
-// Usage (metering deferred to translation), 429 becomes a RateLimitError, any other status an
-// UpstreamError.
-func handleResponse(resp *http.Response, out domain.StreamSink) (usage.Usage, error) {
-	body, err := io.ReadAll(resp.Body)
+// handleNonStreaming aggregates the upstream Responses SSE, translates to chat.completion,
+// writes the JSON to out, and returns the usage from the real Responses usage block.
+func handleNonStreaming(body io.Reader, out domain.StreamSink) (usage.Usage, error) {
+	completed, err := aggregateCompleted(body)
 	if err != nil {
-		return usage.Usage{}, fmt.Errorf("read response body:\n%w", err)
+		return usage.Usage{}, fmt.Errorf("aggregate completed response:\n%w", err)
 	}
-	if resp.StatusCode == http.StatusOK {
-		return relay(body, out)
+	ccJSON, u, err := translateResponse(completed)
+	if err != nil {
+		return usage.Usage{}, fmt.Errorf("translate response:\n%w", err)
 	}
-	return usage.Usage{}, classifyUpstream(resp.StatusCode, resp.Header, body)
-}
-
-// relay writes the upstream body to out and flushes it, returning a zero Usage.
-func relay(body []byte, out domain.StreamSink) (usage.Usage, error) {
-	if _, err := out.Write(body); err != nil {
-		return usage.Usage{}, fmt.Errorf("write response body:\n%w", err)
+	if _, err := out.Write(ccJSON); err != nil {
+		return usage.Usage{}, fmt.Errorf("write chat completion:\n%w", err)
 	}
 	out.Flush()
-	return usage.Usage{}, nil
+	return u, nil
 }
 
 // classifyUpstream maps a non-200 Codex response to a typed error: a 429 becomes a RateLimitError

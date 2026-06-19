@@ -1,0 +1,37 @@
+{
+  "id": "resp_abc123",
+  "object": "response",
+  "status": "completed",
+  "model": "gpt-5",
+  "output": [
+    {
+      "type": "reasoning",
+      "id": "rs_001",
+      "summary": []
+    },
+    {
+      "type": "message",
+      "id": "msg_001",
+      "status": "completed",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "output_text",
+          "text": "The weather in San Francisco is 68°F and sunny."
+        }
+      ]
+    },
+    {
+      "type": "function_call",
+      "id": "fc_001",
+      "call_id": "call_abc",
+      "name": "get_weather",
+      "arguments": "{\"location\": \"San Francisco\", \"unit\": \"fahrenheit\"}"
+    }
+  ],
+  "usage": {
+    "input_tokens": 42,
+    "output_tokens": 87,
+    "total_tokens": 129
+  }
+}

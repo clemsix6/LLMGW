@@ -1,0 +1,19 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_abc123","object":"response","status":"in_progress","model":"gpt-5"}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","response":{"id":"resp_abc123","object":"response","status":"in_progress","model":"gpt-5"}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_001","output_index":1,"content_index":0,"delta":"The weather in "}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_001","output_index":1,"content_index":0,"delta":"San Francisco is 68°F and sunny."}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","item_id":"msg_001","output_index":1,"content_index":0,"text":"The weather in San Francisco is 68°F and sunny."}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_abc123","object":"response","status":"completed","model":"gpt-5","output":[{"type":"reasoning","id":"rs_001","summary":[]},{"type":"message","id":"msg_001","status":"completed","role":"assistant","content":[{"type":"output_text","text":"The weather in San Francisco is 68°F and sunny."}]},{"type":"function_call","id":"fc_001","call_id":"call_abc","name":"get_weather","arguments":"{\"location\": \"San Francisco\", \"unit\": \"fahrenheit\"}"}],"usage":{"input_tokens":42,"output_tokens":87,"total_tokens":129}}}
+
+data: [DONE]
