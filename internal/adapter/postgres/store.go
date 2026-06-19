@@ -17,9 +17,6 @@ const (
 	// DefaultProviderName identifies the single Claude Max provider used in V1. The handler
 	// records it as the serving backend on every usage_event.
 	DefaultProviderName = "claude_max"
-
-	// defaultProviderType is the backend type of the V1 Claude Max OAuth provider.
-	defaultProviderType = "claude_max_oauth"
 )
 
 // compile-time assertion that Store satisfies the domain port.

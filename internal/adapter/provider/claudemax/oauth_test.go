@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
 	"github.com/clemsix6/LLMGW/internal/domain"
 )
 
@@ -83,7 +84,7 @@ func successBody(access, refresh string, expiresIn int) string {
 
 // managerFor builds a token manager pointed at the stub base URL.
 func managerFor(store tokenStore, baseURL string) *tokenManager {
-	m := newTokenManager(store, "2.1.181", claudeMaxProviderName)
+	m := newTokenManager(store, "2.1.181", postgres.DefaultProviderName)
 	m.baseURL = baseURL
 	return m
 }
@@ -95,7 +96,7 @@ func expiredToken(refresh string) domain.Token {
 
 func TestOAuthRefreshesExpiredToken(t *testing.T) {
 	store := newFakeTokenStore()
-	store.tokens[tokenKey{claudeMaxProviderName, "acct"}] = expiredToken("r1")
+	store.tokens[tokenKey{postgres.DefaultProviderName, "acct"}] = expiredToken("r1")
 	stub := newStubOAuth(t, http.StatusOK, successBody("new-access", "r2", 28800), 0)
 	m := managerFor(store, stub.server.URL)
 
@@ -113,7 +114,7 @@ func TestOAuthRefreshesExpiredToken(t *testing.T) {
 
 func TestOAuthValidUsesCachedTokenWhenFresh(t *testing.T) {
 	store := newFakeTokenStore()
-	store.tokens[tokenKey{claudeMaxProviderName, "acct"}] = domain.Token{AccessToken: "live", RefreshToken: "r1", ExpiresAt: time.Now().Add(time.Hour)}
+	store.tokens[tokenKey{postgres.DefaultProviderName, "acct"}] = domain.Token{AccessToken: "live", RefreshToken: "r1", ExpiresAt: time.Now().Add(time.Hour)}
 	stub := newStubOAuth(t, http.StatusOK, successBody("unused", "r2", 28800), 0)
 	m := managerFor(store, stub.server.URL)
 
@@ -131,7 +132,7 @@ func TestOAuthValidUsesCachedTokenWhenFresh(t *testing.T) {
 
 func TestOAuthSingleFlightRefresh(t *testing.T) {
 	store := newFakeTokenStore()
-	store.tokens[tokenKey{claudeMaxProviderName, "acct"}] = expiredToken("r1")
+	store.tokens[tokenKey{postgres.DefaultProviderName, "acct"}] = expiredToken("r1")
 	stub := newStubOAuth(t, http.StatusOK, successBody("new-access", "r2", 28800), 100*time.Millisecond)
 	m := managerFor(store, stub.server.URL)
 
@@ -167,7 +168,7 @@ func TestOAuthSingleFlightRefresh(t *testing.T) {
 
 func TestOAuthPersistsRotatedToken(t *testing.T) {
 	store := newFakeTokenStore()
-	store.tokens[tokenKey{claudeMaxProviderName, "acct"}] = expiredToken("r1")
+	store.tokens[tokenKey{postgres.DefaultProviderName, "acct"}] = expiredToken("r1")
 	stub := newStubOAuth(t, http.StatusOK, successBody("new-access", "rotated", 28800), 0)
 	m := managerFor(store, stub.server.URL)
 
@@ -175,7 +176,7 @@ func TestOAuthPersistsRotatedToken(t *testing.T) {
 		t.Fatalf("Valid: %v", err)
 	}
 
-	saved, err := store.LoadToken(context.Background(), claudeMaxProviderName, "acct")
+	saved, err := store.LoadToken(context.Background(), postgres.DefaultProviderName, "acct")
 	if err != nil {
 		t.Fatalf("LoadToken: %v", err)
 	}
@@ -192,7 +193,7 @@ func TestOAuthPersistsRotatedToken(t *testing.T) {
 
 func TestOAuthInvalidGrantReturnsDeadError(t *testing.T) {
 	store := newFakeTokenStore()
-	store.tokens[tokenKey{claudeMaxProviderName, "acct"}] = expiredToken("r1")
+	store.tokens[tokenKey{postgres.DefaultProviderName, "acct"}] = expiredToken("r1")
 	stub := newStubOAuth(t, http.StatusBadRequest, `{"error":"invalid_grant"}`, 0)
 	m := managerFor(store, stub.server.URL)
 

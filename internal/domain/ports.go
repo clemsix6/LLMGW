@@ -155,5 +155,4 @@ type Store interface {
 
 	// ReleaseReservation removes a previously created reservation.
 	ReleaseReservation(ctx context.Context, reservationID int64) error
-
 }

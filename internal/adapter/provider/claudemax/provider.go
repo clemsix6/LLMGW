@@ -13,14 +13,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
 	"github.com/clemsix6/LLMGW/internal/domain"
 	"github.com/clemsix6/LLMGW/internal/domain/llm"
 	"github.com/clemsix6/LLMGW/internal/domain/usage"
 )
-
-// claudeMaxProviderName is the provider-table name for the Claude Max OAuth backend. It is passed
-// to every store call so token and account queries are scoped to this provider row.
-const claudeMaxProviderName = "claude_max"
 
 // compile-time assertion that Provider satisfies the domain port.
 var _ domain.Provider = (*Provider)(nil)
@@ -120,10 +117,10 @@ type Provider struct {
 // New builds a Claude Max provider over the accounts persisted in store, spoofing claudeCodeVersion.
 func New(store accountStore, claudeCodeVersion string) *Provider {
 	return &Provider{
-		tokens:       newTokenManager(store, claudeCodeVersion, claudeMaxProviderName),
+		tokens:       newTokenManager(store, claudeCodeVersion, postgres.DefaultProviderName),
 		spoof:        spoof{version: claudeCodeVersion},
 		store:        store,
-		providerName: claudeMaxProviderName,
+		providerName: postgres.DefaultProviderName,
 		httpClient:   &http.Client{},
 		baseURL:      defaultAnthropicBaseURL,
 	}
