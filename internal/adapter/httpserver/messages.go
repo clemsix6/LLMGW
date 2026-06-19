@@ -241,19 +241,6 @@ func writeProviderError(w http.ResponseWriter, err error) {
 	writeError(w, http.StatusInternalServerError, "internal", err.Error())
 }
 
-// upstreamStatus echoes a sane upstream HTTP status, falling back to 502 for nonsensical codes.
-func upstreamStatus(status int) int {
-	if status >= 400 && status <= 599 {
-		return status
-	}
-	return http.StatusBadGateway
-}
-
-// retryAfterSeconds renders a Retry-After delay (whole seconds, at least one) until resetAt.
-func retryAfterSeconds(resetAt time.Time) string {
-	return retryAfterDuration(time.Until(resetAt))
-}
-
 // retryAfterDuration renders a Retry-After delay (whole seconds, at least one) for a duration.
 func retryAfterDuration(d time.Duration) string {
 	seconds := int(d.Seconds())

@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -35,5 +36,18 @@ func TestWriteProviderErrorUsesContract(t *testing.T) {
 
 	if rec.Code != 503 || rec.Header().Get("Retry-After") != "90" {
 		t.Fatalf("status=%d retry=%q", rec.Code, rec.Header().Get("Retry-After"))
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode response body: %v", err)
+	}
+	errDetail, ok := body["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error field is missing or not an object")
+	}
+	errType, ok := errDetail["type"].(string)
+	if !ok || errType != "all_cooling" {
+		t.Fatalf("error.type=%v, want all_cooling", errType)
 	}
 }
