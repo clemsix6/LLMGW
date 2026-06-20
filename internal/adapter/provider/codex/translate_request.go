@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 )
 
 // validCodexModels is the set of model ids the Codex ChatGPT-account backend actually serves
@@ -11,6 +12,17 @@ import (
 // ChatGPT account"). Unknown models are rejected at translation time.
 var validCodexModels = map[string]bool{
 	"gpt-5.5": true,
+}
+
+// Models returns the sorted model ids the Codex backend serves, for the gateway's GET /v1/models
+// discovery endpoint. It is the single source of truth shared with request validation.
+func Models() []string {
+	out := make([]string, 0, len(validCodexModels))
+	for model := range validCodexModels {
+		out = append(out, model)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // chatBody is the full Chat Completions request body parsed for translation.

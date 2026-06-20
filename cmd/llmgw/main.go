@@ -78,6 +78,7 @@ func run() error {
 			Provider:     codexProv,
 			Wire:         httpserver.OpenAIWire{},
 			ProviderName: postgres.CodexProviderName,
+			Models:       codex.Models(),
 		},
 	}
 
