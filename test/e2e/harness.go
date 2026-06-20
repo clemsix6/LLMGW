@@ -157,7 +157,7 @@ func (h *Harness) SeedCodex(ctx context.Context, account, refreshToken, accountI
 	h.listener = listener
 	h.BaseURL = "http://" + listener.Addr().String()
 
-	codexProv := codex.New(h.store, version)
+	codexProv := codex.New(h.store, version, false)
 	routes := []httpserver.Route{{
 		Path:         "/v1/chat/completions",
 		Provider:     codexProv,

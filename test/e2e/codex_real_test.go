@@ -87,7 +87,7 @@ func newCodexProvider(t *testing.T, ctx context.Context, refreshToken, accountID
 	if err := store.SeedCodexAccount(ctx, codexTestAccount, refreshToken, accountID); err != nil {
 		t.Fatalf("seed codex account: %v", err)
 	}
-	return codex.New(store, testCodexVersion)
+	return codex.New(store, testCodexVersion, false)
 }
 
 // codexSendWithRetry calls Send, retrying transient (5xx/network) errors with bounded backoff. It

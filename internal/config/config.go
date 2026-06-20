@@ -22,6 +22,8 @@ type Config struct {
 	CodexAccounts []CodexAccount // CodexAccounts seeds the per-account Codex refresh tokens and account identifiers.
 
 	CodexVersion string // CodexVersion is the spoofed Codex client version sent in provider request headers.
+
+	CodexWebSearch bool // CodexWebSearch advertises OpenAI's native web_search built-in tool on every Codex request when true.
 }
 
 // CodexAccount is a single seed Codex account bound to a label.
@@ -80,6 +82,7 @@ func Load() (Config, error) {
 		DefaultProject:    os.Getenv("LLMGW_DEFAULT_PROJECT"),
 		CodexAccounts:     codexAccounts,
 		CodexVersion:      valueOr(os.Getenv("LLMGW_CODEX_VERSION"), defaultCodexVersion),
+		CodexWebSearch:    boolEnv("LLMGW_CODEX_WEB_SEARCH"),
 	}, nil
 }
 
@@ -89,6 +92,16 @@ func valueOr(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+// boolEnv reports whether the named environment variable is set to a truthy value ("true" or "1").
+func boolEnv(name string) bool {
+	switch strings.TrimSpace(os.Getenv(name)) {
+	case "true", "1":
+		return true
+	default:
+		return false
+	}
 }
 
 // parseSessionKeys parses a comma-separated list of "label=key" pairs.

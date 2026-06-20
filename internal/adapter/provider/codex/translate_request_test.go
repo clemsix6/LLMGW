@@ -25,7 +25,7 @@ func TestTranslateRequestMapsCoreFields(t *testing.T) {
 	in := []byte(`{"model":"gpt-5.5","max_tokens":256,"messages":[
 		{"role":"system","content":"be terse"},{"role":"user","content":"hi"}],
 		"tools":[{"type":"function","function":{"name":"f","parameters":{}}}]}`)
-	out, err := translateRequest(in, "CODEX_MIN")
+	out, err := translateRequest(in, "CODEX_MIN", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestTranslateRequestAssistantToolCall(t *testing.T) {
 		{"role":"assistant","content":null,"tool_calls":[
 			{"id":"call_1","type":"function","function":{"name":"f","arguments":"{}"}}]},
 		{"role":"tool","tool_call_id":"call_1","content":"ok"}]}`)
-	out, err := translateRequest(in, "inst")
+	out, err := translateRequest(in, "inst", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +65,7 @@ func TestTranslateRequestAssistantToolCall(t *testing.T) {
 // with HTTPStatus 400, so the handler surfaces a 4xx (not 500) to retry-aware clients.
 func TestTranslateRequestInvalidModel(t *testing.T) {
 	in := []byte(`{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`)
-	_, err := translateRequest(in, "inst")
+	_, err := translateRequest(in, "inst", false)
 	if err == nil {
 		t.Fatal("expected error for unknown model")
 	}
@@ -82,7 +82,7 @@ func TestTranslateRequestInvalidModel(t *testing.T) {
 // TestTranslateRequestStreamForced verifies that the output always has stream:true.
 func TestTranslateRequestStreamForced(t *testing.T) {
 	in := []byte(`{"model":"gpt-5.5","stream":false,"messages":[{"role":"user","content":"hi"}]}`)
-	out, err := translateRequest(in, "inst")
+	out, err := translateRequest(in, "inst", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +154,7 @@ func assertInputContainsType(t *testing.T, input []any, itemType string) {
 // requires (it rejects the nested form with "Missing required parameter: tool_choice.name").
 func TestTranslateToolChoiceFlattensFunction(t *testing.T) {
 	in := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}],"tool_choice":{"type":"function","function":{"name":"get_weather"}}}`)
-	out, err := translateRequest(in, "X")
+	out, err := translateRequest(in, "X", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestTranslateToolChoiceFlattensFunction(t *testing.T) {
 // TestTranslateToolChoicePassThrough verifies a string tool_choice ("auto") passes through unchanged.
 func TestTranslateToolChoicePassThrough(t *testing.T) {
 	in := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}],"tool_choice":"auto"}`)
-	out, err := translateRequest(in, "X")
+	out, err := translateRequest(in, "X", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,4 +184,71 @@ func TestTranslateToolChoicePassThrough(t *testing.T) {
 	if got["tool_choice"] != "auto" {
 		t.Fatalf("tool_choice = %v, want \"auto\"", got["tool_choice"])
 	}
+}
+
+// TestTranslateRequestInjectsWebSearch verifies that with webSearch=true the native web_search
+// built-in tool is appended alongside the client's function tools, and that it serializes as a bare
+// {"type":"web_search"} with no name field (the backend rejects web_search_preview and an empty name).
+func TestTranslateRequestInjectsWebSearch(t *testing.T) {
+	in := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}],
+		"tools":[{"type":"function","function":{"name":"f","parameters":{}}}]}`)
+	out, err := translateRequest(in, "inst", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+
+	assertHasFunctionTool(t, got)
+
+	ws := findToolByType(t, got, "web_search")
+	if _, hasName := ws["name"]; hasName {
+		t.Fatalf("web_search tool must not carry a name field: %v", ws)
+	}
+}
+
+// TestTranslateRequestWebSearchWithoutClientTools verifies the web_search tool is injected even when
+// the client sent no tools of its own (the tools field must then be present, not omitted).
+func TestTranslateRequestWebSearchWithoutClientTools(t *testing.T) {
+	in := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`)
+	out, err := translateRequest(in, "inst", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+	findToolByType(t, got, "web_search")
+}
+
+// TestTranslateRequestNoWebSearchByDefault verifies that with webSearch=false no web_search tool is
+// added and a request with no client tools omits the tools field entirely.
+func TestTranslateRequestNoWebSearchByDefault(t *testing.T) {
+	in := []byte(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`)
+	out, err := translateRequest(in, "inst", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	_ = json.Unmarshal(out, &got)
+	if _, ok := got["tools"]; ok {
+		t.Fatalf("tools must be omitted when there are no tools and webSearch is off: %v", got["tools"])
+	}
+}
+
+// findToolByType returns the first tool object in got["tools"] with the given type, failing the
+// test when none is present.
+func findToolByType(t *testing.T, got map[string]any, toolType string) map[string]any {
+	t.Helper()
+	tools, ok := got["tools"].([]any)
+	if !ok {
+		t.Fatalf("tools is not an array: %v", got["tools"])
+	}
+	for _, tool := range tools {
+		m, ok := tool.(map[string]any)
+		if ok && m["type"] == toolType {
+			return m
+		}
+	}
+	t.Fatalf("no tool with type %q found in %v", toolType, tools)
+	return nil
 }

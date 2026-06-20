@@ -65,7 +65,7 @@ func run() error {
 	}
 
 	claude := claudemax.New(store, cfg.ClaudeCodeVersion)
-	codexProv := codex.New(store, cfg.CodexVersion)
+	codexProv := codex.New(store, cfg.CodexVersion, cfg.CodexWebSearch)
 	routes := []httpserver.Route{
 		{
 			Path:         "/v1/messages",

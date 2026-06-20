@@ -360,7 +360,7 @@ func (s *codexStub) handle(w http.ResponseWriter, r *http.Request) {
 
 // codexPoolProvider builds a pool provider over store, pointed at the stub base URL.
 func codexPoolProvider(store accountStore, baseURL string) *Provider {
-	p := New(store, "0.40.0")
+	p := New(store, "0.40.0", false)
 	p.baseURL = baseURL
 	return p
 }
