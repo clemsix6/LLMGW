@@ -1,39 +1,42 @@
 name: E2E Codex (real subscription)
 
-# Codex (ChatGPT-subscription) E2E against the LIVE backend.
+# Codex (ChatGPT-subscription) E2E against the LIVE backend. MANUAL-ONLY (workflow_dispatch).
 #
-# Unlike Anthropic's claude.ai session_key (durable, never rotates), the Codex refresh_token
-# ROTATES on every use — a static secret would die after the first run. So this workflow:
+# Why not automatic like the Anthropic E2E? A ChatGPT account permits only ONE active Codex session:
+# every `codex login` / refresh rotates the refresh_token AND supersedes any other session on the
+# account. Production holds that single live session, so CI cannot co-hold a token — an automatic run
+# would just fail at the refresh step (invalid_grant) and red out main. Anthropic's claude.ai
+# session_key is durable and multi-session, which is why ITS E2E can run on every push.
+#
+# Day-to-day regression safety is covered by the hermetic unit tests in ci.yml (translation, wire,
+# stream parsing). This workflow exists only to validate the real OAuth + Codex spoof + Responses
+# wire against OpenAI's backend, on demand.
+#
+# To run it successfully the refresh_token must NOT be the session prod is using, i.e. either:
+#   - a SEPARATE ChatGPT account dedicated to CI (a paid plan — Codex requires one), OR
+#   - temporarily sacrifice prod: re-seed LLMGW_CODEX_REFRESH_TOKEN here from a fresh `codex login`,
+#     dispatch this run, then `codex login` again on the prod host to take the session back.
+#
+# When it does run, it handles the rotating token like so:
 #   1. refreshes the token ITSELF (curl) and writes the rotated refresh_token BACK to the secret
 #      immediately (gh secret set -> needs a PAT with Secrets:write in GH_SECRETS_PAT);
-#   2. seeds the FRESH access_token into the smoke, which then uses it WITHOUT rotating again
-#      (the rotation happens exactly once, in the step above, with a near-zero write-back window);
-#   3. SERIALIZES every token user (concurrency) so two runs can't rotate the same token and
-#      invalidate each other;
-#   4. runs a keepalive on a schedule so the chain never crosses the ~8-day idle expiry.
+#   2. seeds the FRESH access_token into the smoke, which then serves WITHOUT rotating again.
 #
-# === ONE-TIME SETUP (you must do this) ===
-# Create these repo secrets (Settings -> Secrets and variables -> Actions):
+# === ONE-TIME SETUP ===
+# Repo secrets (Settings -> Secrets and variables -> Actions):
 #   LLMGW_CODEX_REFRESH_TOKEN  = jq -r .tokens.refresh_token ~/.codex/auth.json   (after `codex login`)
 #   LLMGW_CODEX_ACCOUNT_ID     = jq -r .tokens.account_id    ~/.codex/auth.json
 #   GH_SECRETS_PAT             = a fine-grained PAT for THIS repo with "Secrets: Read and write"
-# If the refresh ever fails (chain broken / >8d idle / token revoked), just re-seed
-# LLMGW_CODEX_REFRESH_TOKEN from a fresh `codex login` — that's the documented recovery.
 
 on:
-  push:
-    branches: [main]
-  schedule:
-    - cron: '17 4 */3 * *'   # every 3 days, < the ~8-day idle limit: keep the refresh chain alive
-  workflow_dispatch:
+  workflow_dispatch:   # manual-only — see the header for why this cannot run automatically
 
 permissions:
   contents: read
 
 concurrency:
-  # CRITICAL: serialize ALL token users (the E2E run AND the scheduled keepalive). Two concurrent
-  # refreshes would rotate the same token and one would invalidate the other -> chain broken.
-  # Never cancel an in-progress run (it may be mid-refresh/write-back).
+  # Serialize token users: two concurrent refreshes would rotate the same token and invalidate each
+  # other. Never cancel an in-progress run (it may be mid-refresh/write-back).
   group: llmgw-codex-token
   cancel-in-progress: false
 
@@ -89,8 +92,7 @@ jobs:
           # Hand the fresh access token (+ rotated refresh) to the smoke via env (masked):
           { echo "CODEX_ACCESS=$access"; echo "CODEX_REFRESH=$new_refresh"; } >> "$GITHUB_ENV"
 
-      - name: E2E smoke (skipped on schedule — keepalive only)
-        if: github.event_name != 'schedule'
+      - name: E2E smoke (real Codex)
         env:
           # The smoke seeds the fresh ACCESS token, so the gateway serves WITHOUT a second rotation.
           LLMGW_CODEX_TEST_ACCESS_TOKEN: ${{ env.CODEX_ACCESS }}
