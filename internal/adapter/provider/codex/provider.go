@@ -45,11 +45,15 @@ type Provider struct {
 
 	baseURL string // baseURL is the Codex Responses base; injectable for tests.
 
+	webSearch bool // webSearch injects OpenAI's native web_search built-in tool into every request when true.
+
 	next atomic.Uint64 // next is the round-robin cursor, advanced once per Send.
 }
 
-// New builds a Codex provider over the accounts persisted in store, spoofing version.
-func New(store accountStore, version string) *Provider {
+// New builds a Codex provider over the accounts persisted in store, spoofing version. When
+// webSearch is true, every request advertises OpenAI's native web_search built-in tool so the
+// model can search the web server-side.
+func New(store accountStore, version string, webSearch bool) *Provider {
 	return &Provider{
 		tokens:       newTokenManager(store, postgres.CodexProviderName),
 		spoof:        spoof{version: version},
@@ -57,6 +61,7 @@ func New(store accountStore, version string) *Provider {
 		providerName: postgres.CodexProviderName,
 		httpClient:   &http.Client{},
 		baseURL:      defaultResponsesBaseURL,
+		webSearch:    webSearch,
 	}
 }
 
@@ -94,7 +99,7 @@ func (p *Provider) sendVia(ctx context.Context, account string, req llm.Request,
 		return usage.Usage{}, fmt.Errorf("obtain access token:\n%w", err)
 	}
 
-	body, err := translateRequest(req.Bytes(), instructions())
+	body, err := translateRequest(req.Bytes(), instructions(), p.webSearch)
 	if err != nil {
 		return usage.Usage{}, fmt.Errorf("translate request:\n%w", err)
 	}
@@ -157,10 +162,11 @@ type responseContent struct {
 	Text string `json:"text"` // Text is the message text.
 }
 
-// responseTool is a callable function in the Responses API tools array.
+// responseTool is a callable tool in the Responses API tools array — either a client function
+// ({type:"function", name, ...}) or a server-side built-in like web_search ({type:"web_search"}).
 type responseTool struct {
-	Type        string          `json:"type"`                  // Type is always "function".
-	Name        string          `json:"name"`                  // Name is the function identifier.
+	Type        string          `json:"type"`                  // Type is "function" or a built-in type such as "web_search".
+	Name        string          `json:"name,omitempty"`        // Name is the function identifier; omitted for built-in tools.
 	Description string          `json:"description,omitempty"` // Description explains what the function does.
 	Parameters  json.RawMessage `json:"parameters,omitempty"`  // Parameters is the JSON Schema for function arguments.
 }

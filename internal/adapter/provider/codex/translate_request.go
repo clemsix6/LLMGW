@@ -70,7 +70,8 @@ type chatCallFunc struct {
 
 // translateRequest converts a Chat Completions body to a Responses body per spec §5.2.
 // instructions is the Codex system prompt written into the Responses instructions field.
-func translateRequest(body []byte, instructions string) ([]byte, error) {
+// When webSearch is true, OpenAI's native web_search built-in tool is appended to the tools list.
+func translateRequest(body []byte, instructions string, webSearch bool) ([]byte, error) {
 	var cc chatBody
 	if err := json.Unmarshal(body, &cc); err != nil {
 		return nil, fmt.Errorf("parse chat completions body:\n%w", err)
@@ -91,7 +92,7 @@ func translateRequest(body []byte, instructions string) ([]byte, error) {
 		Input:        input,
 		Store:        false,
 		Stream:       true,
-		Tools:        translateTools(cc.Tools),
+		Tools:        translateTools(cc.Tools, webSearch),
 		ToolChoice:   translateToolChoice(cc.ToolChoice),
 	}
 	out, err := json.Marshal(req)
@@ -191,13 +192,11 @@ func translateToolResult(msg chatMsg) []responseItem {
 	}}
 }
 
-// translateTools maps Chat Completions tool definitions to Responses function tools.
-// Returns nil when tools is empty so the field is omitted from the JSON output.
-func translateTools(tools []chatTool) []responseTool {
-	if len(tools) == 0 {
-		return nil
-	}
-	out := make([]responseTool, 0, len(tools))
+// translateTools maps Chat Completions tool definitions to Responses function tools, appending
+// OpenAI's native web_search built-in tool when webSearch is true so the model can search the web
+// server-side. Returns nil only when there are no tools at all, so the field is omitted.
+func translateTools(tools []chatTool, webSearch bool) []responseTool {
+	out := make([]responseTool, 0, len(tools)+1)
 	for _, t := range tools {
 		out = append(out, responseTool{
 			Type:        "function",
@@ -205,6 +204,12 @@ func translateTools(tools []chatTool) []responseTool {
 			Description: t.Function.Description,
 			Parameters:  t.Function.Parameters,
 		})
+	}
+	if webSearch {
+		out = append(out, responseTool{Type: "web_search"})
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
