@@ -4,8 +4,19 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"testing"
 )
+
+// TestModelsReturnsServedIDs verifies Models() exposes exactly the ids the backend serves — the
+// same source of truth (validCodexModels) that validateModel uses to reject unknown models.
+func TestModelsReturnsServedIDs(t *testing.T) {
+	got := Models()
+	want := []string{"gpt-5.5"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Models() = %v, want %v", got, want)
+	}
+}
 
 // TestTranslateRequestMapsCoreFields verifies that translateRequest produces
 // store:false, no max_output_tokens (backend rejects it), instructions set,

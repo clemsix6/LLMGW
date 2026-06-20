@@ -163,6 +163,7 @@ func (h *Harness) SeedCodex(ctx context.Context, account, refreshToken, accountI
 		Provider:     codexProv,
 		Wire:         httpserver.OpenAIWire{},
 		ProviderName: postgres.CodexProviderName,
+		Models:       codex.Models(),
 	}}
 	h.server = httpserver.New(h.store, "", routes)
 	go func() { _ = h.server.Serve(h.listener) }()

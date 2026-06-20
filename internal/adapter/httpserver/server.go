@@ -31,6 +31,8 @@ type Route struct {
 	Wire Wire // Wire parses request bodies and supplies the default budget tag.
 
 	ProviderName string // ProviderName labels the backend on every recorded usage_event.
+
+	Models []string // Models lists the model ids this route serves, advertised by GET /v1/models.
 }
 
 // Server is the gateway's HTTP surface.
@@ -45,6 +47,7 @@ type Server struct {
 func New(store domain.Store, defaultProject string, routes []Route) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", handleHealth)
+	mux.HandleFunc("GET /v1/models", modelsHandler(routes))
 
 	for _, rt := range routes {
 		h := newHandler(store, rt.Provider, rt.Wire, rt.ProviderName, defaultProject)
