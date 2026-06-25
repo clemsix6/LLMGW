@@ -239,6 +239,30 @@ func TestNormalizeLeavesStringSystemUntouched(t *testing.T) {
 	}
 }
 
+func TestNormalizeDropsContextManagement(t *testing.T) {
+	req := parse(t, `{"model":"claude-opus-4-8","context_management":{"edits":[{"type":"clear_tool_uses_20250919"}]},"system":[{"type":"text","text":"keep me"}]}`)
+
+	normalized := req.Normalize()
+
+	if _, present := normalized.body["context_management"]; present {
+		t.Error("Normalize did not drop the context_management parameter")
+	}
+	if _, present := req.body["context_management"]; !present {
+		t.Error("Normalize mutated the original request's context_management")
+	}
+	if system := systemBlocks(t, normalized); len(system) != 1 {
+		t.Fatalf("system blocks = %d, want 1 (system normalization must still apply)", len(system))
+	}
+}
+
+func TestNormalizeDropsContextManagementWithoutSystem(t *testing.T) {
+	req := parse(t, `{"model":"x","context_management":{"edits":[]}}`)
+
+	if _, present := req.Normalize().body["context_management"]; present {
+		t.Error("Normalize did not drop context_management when no system array is present")
+	}
+}
+
 // blockCacheControl returns the cache_control object of a decoded system block.
 func blockCacheControl(t *testing.T, block any) map[string]any {
 	t.Helper()

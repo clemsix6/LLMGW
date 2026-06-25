@@ -144,20 +144,22 @@ func cloneTopLevel(body map[string]any) map[string]any {
 	return clone
 }
 
-// Normalize returns a copy of the request with the minimal system-block transforms the OAuth
-// surface requires before forwarding, mirroring clewdr's drop_empty_system +
-// strip_ephemeral_scope_from_system: whitespace-only system text blocks are dropped and the
-// ephemeral cache_control "scope" is stripped from the remaining blocks. Consumers using
-// prompt caching send these and Anthropic rejects them otherwise. Everything else is left
+// Normalize returns a copy of the request with the minimal transforms the OAuth surface requires
+// before forwarding, mirroring clewdr's drop_empty_system + strip_ephemeral_scope_from_system:
+// whitespace-only system text blocks are dropped and the ephemeral cache_control "scope" is
+// stripped from the remaining blocks. It also drops the top-level context_management parameter,
+// which Claude Code 2.1.x sends but the OAuth surface rejects as an unknown field
+// ("context_management: Extra inputs are not permitted"). Consumers using prompt caching or
+// context editing send these and Anthropic rejects them otherwise. Everything else is left
 // untouched, and the original request is never mutated.
 func (r ChatRequest) Normalize() ChatRequest {
-	system, ok := r.body["system"].([]any)
-	if !ok {
-		return r
+	body := cloneTopLevel(r.body)
+	delete(body, "context_management")
+
+	if system, ok := body["system"].([]any); ok {
+		body["system"] = normalizeSystem(system)
 	}
 
-	body := cloneTopLevel(r.body)
-	body["system"] = normalizeSystem(system)
 	return ChatRequest{body: body}
 }
 
