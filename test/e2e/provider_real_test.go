@@ -34,7 +34,7 @@ const (
 	testAccount = "acct1"
 
 	// testClaudeCodeVersion is the spoofed Claude Code version used in the E2E.
-	testClaudeCodeVersion = "2.1.181"
+	testClaudeCodeVersion = "2.1.204"
 
 	// minContentLength is the lower bound (chars) for a plausible-length model reply (spec §11).
 	minContentLength = 3

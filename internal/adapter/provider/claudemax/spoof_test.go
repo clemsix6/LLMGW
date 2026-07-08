@@ -37,11 +37,11 @@ func TestBillingHeaderMatchesClewdrGoldenVectors(t *testing.T) {
 }
 
 func TestBillingHeaderUsesConfiguredVersion(t *testing.T) {
-	s := spoof{version: "2.1.181"}
+	s := spoof{version: "2.1.204"}
 
 	header := s.billingHeader("anything")
 
-	pattern := regexp.MustCompile(`^x-anthropic-billing-header: cc_version=2\.1\.181\.[0-9a-f]{3}; cc_entrypoint=cli; cch=00000;$`)
+	pattern := regexp.MustCompile(`^x-anthropic-billing-header: cc_version=2\.1\.204\.[0-9a-f]{3}; cc_entrypoint=cli; cch=00000;$`)
 	if !pattern.MatchString(header) {
 		t.Errorf("header %q does not match expected format", header)
 	}

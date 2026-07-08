@@ -412,7 +412,7 @@ func streamRequested(body []byte) bool {
 
 // poolProvider builds a pool provider over store, pointed at the stub base URL.
 func poolProvider(store accountStore, baseURL string) *Provider {
-	p := New(store, "2.1.181")
+	p := New(store, "2.1.204")
 	p.baseURL = baseURL
 	return p
 }
