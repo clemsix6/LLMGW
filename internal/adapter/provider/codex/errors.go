@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/clemsix6/LLMGW/internal/domain"
@@ -28,7 +29,7 @@ type InvalidModelError struct {
 
 // Error implements the error interface.
 func (e *InvalidModelError) Error() string {
-	return fmt.Sprintf("unknown Codex model %q: must be one of gpt-5, gpt-5-codex, gpt-5.5", e.Model)
+	return fmt.Sprintf("unknown Codex model %q: must be one of %s", e.Model, strings.Join(Models(), ", "))
 }
 
 // HTTPStatus returns 400 Bad Request; the model is not served by Codex.

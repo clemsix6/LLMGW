@@ -12,7 +12,7 @@ import (
 // same source of truth (validCodexModels) that validateModel uses to reject unknown models.
 func TestModelsReturnsServedIDs(t *testing.T) {
 	got := Models()
-	want := []string{"gpt-5.5"}
+	want := []string{"gpt-5.5", "gpt-5.6-luna", "gpt-5.6-sol", "gpt-5.6-terra"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Models() = %v, want %v", got, want)
 	}

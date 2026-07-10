@@ -11,9 +11,9 @@ import (
 )
 
 // TestModelsEndpointReal boots the full gateway with the codex route wired and asserts
-// GET /v1/models returns the OpenAI list envelope advertising gpt-5.5. It is deterministic
-// (the discovery endpoint never calls the provider), so it runs in the hermetic suite without
-// real credentials — dummy credentials wire the route and are never used.
+// GET /v1/models returns the OpenAI list envelope advertising every served Codex model. It is
+// deterministic (the discovery endpoint never calls the provider), so it runs in the hermetic
+// suite without real credentials — dummy credentials wire the route and are never used.
 func TestModelsEndpointReal(t *testing.T) {
 	testcontainers.SkipIfProviderIsNotHealthy(t)
 
@@ -30,7 +30,9 @@ func TestModelsEndpointReal(t *testing.T) {
 	}
 
 	body := getModels(t, ctx, harness)
-	assertAdvertisesModel(t, body, "gpt-5.5")
+	for _, model := range []string{"gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"} {
+		assertAdvertisesModel(t, body, model)
+	}
 }
 
 // getModels GETs /v1/models and returns the response body, failing on a non-200.

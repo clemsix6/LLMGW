@@ -9,9 +9,14 @@ import (
 
 // validCodexModels is the set of model ids the Codex ChatGPT-account backend actually serves
 // (verified live: gpt-5 and gpt-5-codex are rejected as "not supported when using Codex with a
-// ChatGPT account"). Unknown models are rejected at translation time.
+// ChatGPT account"). The GPT-5.6 tiers use the same explicit ids the Codex CLI accepts — there is
+// no bare "gpt-5.6" alias on this backend, each request must name a tier. Unknown models are
+// rejected at translation time.
 var validCodexModels = map[string]bool{
-	"gpt-5.5": true,
+	"gpt-5.5":       true,
+	"gpt-5.6-sol":   true,
+	"gpt-5.6-terra": true,
+	"gpt-5.6-luna":  true,
 }
 
 // Models returns the sorted model ids the Codex backend serves, for the gateway's GET /v1/models
