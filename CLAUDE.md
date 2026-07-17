@@ -82,6 +82,12 @@ Keep the domain ignorant of HTTP, SQL, and any provider's wire format.
 
 ## Testing (E2E-first against the real provider, CRUCIAL)
 
+> **CI note (2026-07-17):** the real-Anthropic E2E no longer runs in CI. Anthropic now rejects the
+> session-key OAuth bootstrap (authorize step) with `403 session_stale_relogin`, so a fresh CI run
+> can no longer mint tokens and only reddened `main` for an infra reason. The suite below still
+> lives in `test/e2e/` and is the standard for local validation — run it against a freshly
+> re-authenticated credential. CI keeps only the hermetic `check` job (build/vet/gofmt/unit tests).
+
 - **Every feature MUST be covered by end-to-end tests** that drive the real gateway over its
   HTTP API. The E2E suite **hits the real Anthropic API** — a mock would not exercise the
   OAuth + Claude Code spoof, which is the core risk. Accept non-determinism.
