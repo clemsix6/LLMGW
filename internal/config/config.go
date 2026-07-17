@@ -47,7 +47,7 @@ const (
 	defaultListen = "127.0.0.1:8088"
 
 	// defaultClaudeCodeVersion is the spoofed client version when LLMGW_CLAUDE_CODE_VERSION is unset.
-	defaultClaudeCodeVersion = "2.1.204"
+	defaultClaudeCodeVersion = "2.1.212"
 
 	// defaultCodexVersion is the spoofed Codex client version when LLMGW_CODEX_VERSION is unset.
 	defaultCodexVersion = "1.0.0"
