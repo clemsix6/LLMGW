@@ -37,7 +37,7 @@ func TestBillingHeaderMatchesClewdrGoldenVectors(t *testing.T) {
 }
 
 func TestBillingHeaderUsesConfiguredVersion(t *testing.T) {
-	s := spoof{version: "2.1.212"}
+	s := spoof{version: "2.1.214"}
 
 	header := s.billingHeader("anything")
 
