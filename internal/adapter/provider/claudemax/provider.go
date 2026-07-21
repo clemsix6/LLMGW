@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -147,6 +148,7 @@ func (p *Provider) Send(ctx context.Context, req llm.Request, out domain.StreamS
 		metered, err := p.sendVia(ctx, account, chat, out)
 
 		if until, retry := cooldownFor(err, now); retry {
+			log.Printf("llmgw: benching claude_max account %q until %s: %v", account, until.Format(time.RFC3339), err)
 			p.cool(ctx, account, until)
 			continue
 		}

@@ -44,7 +44,7 @@ func bootstrapStub(t *testing.T) *httptest.Server {
 
 // managerForBootstrap builds a token manager pointed at the bootstrap stub.
 func managerForBootstrap(t *testing.T, store tokenStore) *tokenManager {
-	m := newTokenManager(store, "2.1.212", postgres.DefaultProviderName)
+	m := newTokenManager(store, "2.1.214", postgres.DefaultProviderName)
 	m.baseURL = bootstrapStub(t).URL
 	return m
 }

@@ -23,7 +23,7 @@ var sampleIndices = []int{4, 7, 20}
 // spoof produces the Claude Code request markers (billing-header system block + HTTP
 // headers) for the configured client version.
 type spoof struct {
-	version string // version is the spoofed Claude Code client version (e.g. "2.1.212").
+	version string // version is the spoofed Claude Code client version (e.g. "2.1.214").
 }
 
 // billingHeader builds the billing-header system block from the first user message text.
