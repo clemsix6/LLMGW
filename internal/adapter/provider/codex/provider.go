@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -81,6 +82,7 @@ func (p *Provider) Send(ctx context.Context, req llm.Request, out domain.StreamS
 		metered, err := p.sendVia(ctx, account, req, out)
 
 		if until, retry := cooldownFor(err, now); retry {
+			log.Printf("llmgw: benching codex account %q until %s: %v", account, until.Format(time.RFC3339), err)
 			p.cool(ctx, account, until)
 			continue
 		}
