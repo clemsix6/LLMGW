@@ -1,7 +1,7 @@
 # LLMGW CLIProxyAPI SDK Pivot Design
 
 **Date:** 2026-07-27
-**Status:** Draft for review; direction approved in design discussion
+**Status:** Approved
 
 ## 1. Decision
 
@@ -436,7 +436,8 @@ request_event(
   id UUID, project_id, client_key_id,
   requested_at, completed_at,
   method, path, requested_model,
-  state, accounting_state, downstream_status
+  state, accounting_state, downstream_status,
+  accounting_resolved_at
 )
 
 usage_attempt(
@@ -464,8 +465,12 @@ model_price(
 The request ID is generated before dispatch and carried through the request
 context. Attempt IDs are generated once inside `HandleUsage` and reused across
 that handler's database retries. `accounting_state` is one of `pending`,
-`observed`, `accounting_unknown`, or `not_applicable`; `observed` means at least
-one attempt was persisted, not that the SDK supplied a completeness proof.
+`observed`, `accounting_unknown`, `resolved_zero`, or `not_applicable`;
+`observed` means at least one attempt was persisted, not that the SDK supplied a
+completeness proof. `llmgw usage resolve --assume-zero` changes only an
+`accounting_unknown` request to `resolved_zero` and records
+`accounting_resolved_at`; the request still counts as one call while its token and
+cost contribution is explicitly treated as zero.
 
 Indexes support windowed totals by project and timestamp, request-to-attempt
 lookup, public-key lookup, and unresolved request recovery.
