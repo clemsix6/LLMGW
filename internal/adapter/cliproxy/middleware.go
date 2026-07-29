@@ -260,7 +260,6 @@ func requestIdentity(
 		ProjectID:   key.ProjectID,
 		ClientKeyID: key.ClientKeyID,
 		KeyPublicID: key.PublicID,
-		Operation:   request.Operation,
 	}
 }
 

@@ -78,11 +78,6 @@ func (s *sdkStartupSnapshot) Cleanup() error {
 	return s.cleanupErr
 }
 
-// copyStartupAuthDir pins the source tree and copies only regular JSON files.
-func copyStartupAuthDir(source string) (snapshot string, err error) {
-	return copyStartupAuthDirWithHooks(source, startupAuthSnapshotHooks{})
-}
-
 // startupAuthLimits tracks cumulative content copied into one snapshot.
 type startupAuthLimits struct {
 	bytes int64 // bytes is the cumulative copied content size.
@@ -94,17 +89,8 @@ type startupAuthEntry struct {
 	info os.FileInfo // info is the no-follow pre-open identity.
 }
 
-// startupAuthSnapshotHooks supplies deterministic race seams to tests.
-type startupAuthSnapshotHooks struct {
-	beforeFileOpen   func(string) // beforeFileOpen runs after inspection and before openat.
-	beforeSecondRead func(string) // beforeSecondRead runs between bounded reads.
-}
-
-// copyStartupAuthDirWithHooks copies one flat source through deterministic race seams.
-func copyStartupAuthDirWithHooks(
-	source string,
-	hooks startupAuthSnapshotHooks,
-) (snapshot string, err error) {
+// copyStartupAuthDir pins the source tree and copies only regular JSON files.
+func copyStartupAuthDir(source string) (snapshot string, err error) {
 	snapshot, err = newPrivateAuthDir()
 	if err != nil {
 		return "", err
@@ -127,7 +113,7 @@ func copyStartupAuthDirWithHooks(
 		)
 	}
 	defer root.Close()
-	if err := copyFlatAuthFiles(root, snapshot, hooks); err != nil {
+	if err := copyFlatAuthFiles(root, snapshot); err != nil {
 		return cleanupOnError(err)
 	}
 	return snapshot, nil
@@ -150,7 +136,6 @@ func newPrivateAuthDir() (string, error) {
 func copyFlatAuthFiles(
 	root *os.File,
 	destination string,
-	hooks startupAuthSnapshotHooks,
 ) error {
 	names, err := readBoundedAuthNames(root)
 	if err != nil {
@@ -162,7 +147,7 @@ func copyFlatAuthFiles(
 	}
 	limits := startupAuthLimits{}
 	for _, entry := range entries {
-		data, err := openAndReadAuthFile(root, entry, hooks)
+		data, err := openAndReadAuthFile(root, entry)
 		if err != nil {
 			return err
 		}
@@ -225,18 +210,14 @@ func inspectFlatAuthEntries(root *os.File, names []string) ([]startupAuthEntry, 
 func openAndReadAuthFile(
 	root *os.File,
 	entry startupAuthEntry,
-	hooks startupAuthSnapshotHooks,
 ) ([]byte, error) {
 	name := entry.name
-	if hooks.beforeFileOpen != nil {
-		hooks.beforeFileOpen(name)
-	}
 	file, err := openStartupAuthFile(root, name)
 	if err != nil {
 		return nil, errors.New("open SDK startup auth file without symbolic links: unavailable")
 	}
 	defer file.Close()
-	return readStableAuthFile(file, entry.info, name, hooks)
+	return readStableAuthFile(file, entry.info, name)
 }
 
 // readStableAuthFile rejects identity, metadata, or content changes during copy.
@@ -244,7 +225,6 @@ func readStableAuthFile(
 	file *os.File,
 	expected os.FileInfo,
 	name string,
-	hooks startupAuthSnapshotHooks,
 ) ([]byte, error) {
 	before, err := file.Stat()
 	if err != nil || !sameAuthFileState(expected, before) {
@@ -257,9 +237,6 @@ func readStableAuthFile(
 	middle, err := file.Stat()
 	if err != nil || !sameAuthFileState(before, middle) {
 		return nil, errors.New("verify SDK startup auth file: changed during snapshot")
-	}
-	if hooks.beforeSecondRead != nil {
-		hooks.beforeSecondRead(name)
 	}
 	if _, err := file.Seek(0, io.SeekStart); err != nil {
 		return nil, errors.New("rewind SDK startup auth file: unavailable")
