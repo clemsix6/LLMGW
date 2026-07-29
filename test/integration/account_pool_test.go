@@ -238,7 +238,7 @@ func assertNoResetCooldownBehavior(t *testing.T, plaintext string) {
 			t.Fatal("no-reset 429 account did not become eligible within bounded fallback")
 		}
 		testHarness.Upstream.Enqueue(codexUsageResponse("codex-no-reset-model"))
-		status, _ := codexGeneration(t, plaintext, "cooldown-no-reset-model")
+		status, _ := codexGenerationAwaitingCapacity(t, plaintext, "cooldown-no-reset-model", deadline)
 		if status != http.StatusOK {
 			t.Fatalf("no-reset eligibility probe status = %d, want 200", status)
 		}
@@ -320,6 +320,26 @@ func codexGeneration(t *testing.T, plaintext, model string) (int, []byte) {
 	}
 	return gatewayRequest(t, http.MethodPost, "/v1/responses", bytes.NewReader(body),
 		requestHeaders{authorization: "Bearer " + plaintext})
+}
+
+// codexGenerationAwaitingCapacity retries a generation that the gateway refused
+// for usage backpressure. The harness deliberately runs a capacity of two, and a
+// group stays admitted until its usage callback lands, so a probe issued right
+// after a previous response can legitimately find no free permit. Such a refusal
+// never reaches the upstream, so the queued stub response stays untouched.
+func codexGenerationAwaitingCapacity(
+	t *testing.T,
+	plaintext, model string,
+	deadline time.Time,
+) (int, []byte) {
+	t.Helper()
+	for {
+		status, body := codexGeneration(t, plaintext, model)
+		if status != http.StatusServiceUnavailable || !time.Now().Before(deadline) {
+			return status, body
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func lastAuthorization(t *testing.T) string {
