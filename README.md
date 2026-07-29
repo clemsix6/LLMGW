@@ -1,153 +1,185 @@
 # LLMGW
 
-A **local LLM gateway**: one self-hosted Go service that fronts LLM providers behind a
-stable API, with native per-project / per-tag usage tracking and budget limits.
+LLMGW is a governed LLM gateway. One Go binary embeds
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI); it is one process,
+one container, and one listener. There is no second service, child process, or
+reverse proxy between LLMGW and the embedded SDK.
 
-- Drop-in **Anthropic Messages** API (`POST /v1/messages`) — point any Anthropic SDK at it.
-- Governance via headers: `X-Project`, `X-Tags`. Projects auto-create on first use.
-- Per-`(project, tag)` budgets in **calls / tokens / cost**, hourly + daily, hard-block.
-- **V1 backend:** Claude Max via OAuth, bootstrapped from a durable claude.ai **session key**
-  (a maintained Go reimplementation of clewdr's `/code` path, without the flagged TLS
-  fingerprint). **Later:** Anthropic API keys, OpenRouter (any LLM).
-- Local only (binds `127.0.0.1`), no auth, Postgres-backed state.
+LLMGW authenticates every client with a project key, applies project budgets,
+and records normalized request and usage attempts in PostgreSQL. CLIProxyAPI
+continues to own provider protocols, provider authentication, model routing,
+cooldown, and retry behaviour.
 
-Design: [`docs/specs/2026-06-18-llmgw-design.md`](docs/specs/2026-06-18-llmgw-design.md).
+## Deploy
 
-## Deployment
-
-The gateway is a single static binary; configuration lives in environment variables and in
-hand-edited Postgres rows. It runs migrations on boot, so a fresh `llmgw` database is brought
-up to schema automatically.
-
-### 1. Create the database
-
-LLMGW uses a **separate database** named `llmgw` inside the **existing** Postgres instance — it
-does not run its own. Create it once:
-
-```sql
-CREATE DATABASE llmgw;
-```
-
-(Optionally a dedicated role: `CREATE ROLE llmgw LOGIN PASSWORD '...'; GRANT ALL ON DATABASE llmgw TO llmgw;`.)
-The schema is created and migrated by the gateway on its next start — no manual DDL.
-
-### 2. Configure the environment
+LLMGW uses one shared YAML file. Native CLIProxyAPI fields are at the YAML
+root; LLMGW-owned settings are under `llmgw`. Keep provider credentials in the
+YAML only when the native SDK requires them, otherwise use your secret manager
+to render the file. PostgreSQL credentials and the project-key pepper remain
+environment/secret-manager values.
 
 ```sh
+cp config.example.yaml config.yaml
 cp .env.example .env
-# edit .env: set LLMGW_POSTGRES_DSN, LLMGW_SESSION_KEYS, LLMGW_CLAUDE_CODE_VERSION
+chmod 600 config.yaml
 ```
 
-Every variable is documented in [`.env.example`](.env.example).
+`config.yaml` is bind-mounted read-only and may contain native API-key provider
+entries, so its host-side mode must remain `0600`. The example binds the
+container listener to `0.0.0.0:8088`; Compose publishes that listener only on
+`127.0.0.1:8088`. It mounts the persistent `cliproxy-auth` named volume at
+`/var/lib/llmgw/cliproxy-auth`. PostgreSQL is deliberately external: create an
+`llmgw` database and give the configured role access before startup.
 
-### 3. Run
+Run exactly one active `llmgw serve` for a PostgreSQL database and its
+persistent CLIProxyAPI auth directory. A dedicated PostgreSQL session lock
+rejects a second server that shares the database before startup recovery can
+mutate live rows. Do not scale replicas, share one auth directory across
+independent databases, or use an overlapping/rolling rollout. Stop the old
+server completely before starting its replacement.
+
+Generate and store a stable pepper with a cryptographically secure random
+source; it must be at least 32 bytes. For example:
 
 ```sh
-# Prod: pull a released image from GHCR (reproducible; rollback = redeploy the previous tag).
-LLMGW_IMAGE_TAG=v0.1.0 docker compose pull && docker compose up -d
-# Local dev: build from source instead — docker compose up -d --build
-
-docker compose logs -f llmgw    # watch for "llmgw listening on ..." and the migration log
-curl -s http://127.0.0.1:8088/health   # -> ok
+openssl rand -base64 48
 ```
 
-Released images are built and pushed to `ghcr.io/clemsix6/llmgw:<version>` by
-`.github/workflows/release.yml` on every `vX.Y.Z` git tag.
+Put that value in `LLMGW_KEY_PEPPER` and set `LLMGW_POSTGRES_DSN` in `.env`.
+The `.env.example` file has only these deployment inputs: `LLMGW_CONFIG`,
+`LLMGW_POSTGRES_DSN`, `LLMGW_KEY_PEPPER`, and `LLMGW_IMAGE_TAG`.
 
-The compose service publishes the gateway on **`127.0.0.1:8088` only** (host loopback). Inside the
-container the app binds `0.0.0.0` (`LLMGW_LISTEN`); the `127.0.0.1:` publish prefix is what keeps it
-off the network. It connects to the existing Postgres via `LLMGW_POSTGRES_DSN` (use
-`host.docker.internal` as the host when Postgres runs on the docker host; attach to the Postgres
-network and use its service name otherwise).
-
-To run without Docker: `set -a && source .env && set +a && go run ./cmd/llmgw` (set
-`LLMGW_LISTEN=127.0.0.1:8088`).
-
-## Configuration (edit rows directly)
-
-There is no settings API. Limits, prices, and routes are **rows in the `llmgw` database**, edited
-by hand with `psql`. Projects auto-create on first request, so you can set their limits afterward.
-Note `"window"` must be quoted — it is a reserved word in PostgreSQL.
-
-**Budgets** — e.g. cap the `news` tag of the `truewallet` project at 50 calls per hour, hard-block:
-
-```sql
-INSERT INTO budget_limit (project_id, tag, dimension, "window", max_value, action)
-VALUES ((SELECT id FROM project WHERE name = 'truewallet'), 'news', 'calls', 'hour', 50, 'block');
-```
-
-Dimensions: `calls | tokens | cost_usd`. Windows: `hour | day` (sliding). Actions: `block | warn`.
-A `tag` of `NULL` applies the limit to the whole project (aggregated across every tag).
-
-**Prices** — notional cost is computed from `model_price` (USD per million tokens). A request for a
-model with **no price row is blocked (402)** when a cost limit applies (fail-closed). Add or update
-a price:
-
-```sql
-INSERT INTO model_price (model, input_usd_per_mtok, output_usd_per_mtok)
-VALUES ('claude-opus-4-8', 15, 75)
-ON CONFLICT (model) DO UPDATE
-  SET input_usd_per_mtok = EXCLUDED.input_usd_per_mtok,
-      output_usd_per_mtok = EXCLUDED.output_usd_per_mtok;
-```
-
-**Routes / providers** — V1 serves every request through the single seeded Claude Max provider
-(`provider` + `route` rows are migration-seeded). Multi-provider routing arrives in V2.
-
-Inspect current usage at any time, e.g. spend per tag over the last 24h:
-
-```sql
-SELECT tag, COUNT(*) AS calls, SUM(cost_usd) AS cost
-FROM usage_event
-WHERE project_id = (SELECT id FROM project WHERE name = 'truewallet') AND ts >= now() - interval '24 hours'
-GROUP BY tag ORDER BY cost DESC;
-```
-
-## Pointing a consumer at the gateway
-
-The gateway exposes the Anthropic **Messages** API at `POST /v1/messages`. Point any Anthropic SDK
-or HTTP client at the gateway's base URL and add the governance headers:
-
-- `X-Project: <name>` — **required**; the project is auto-created on first use. A client that
-  cannot send custom headers (e.g. a fixed Anthropic SDK) can be made a drop-in by setting
-  `LLMGW_DEFAULT_PROJECT` — header-less calls are then attributed to that project instead of 400.
-- `X-Tags: <tag>` — optional budget bucket (defaults to `default`).
-
-There is no auth (local, trusted traffic); upstream credentials are the gateway's OAuth tokens, so
-no Anthropic API key is needed. SDKs that require an `api_key` field can pass any placeholder.
+Start the single service; migrations run during startup:
 
 ```sh
-curl -s http://127.0.0.1:8088/v1/messages \
-  -H 'content-type: application/json' \
-  -H 'X-Project: truewallet' -H 'X-Tags: news' \
-  -d '{"model":"claude-sonnet-4-6","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}'
+docker compose up -d
+docker compose logs -f llmgw
+curl -fsS http://127.0.0.1:8088/healthz
 ```
 
-Anthropic SDK: set `base_url` to `http://127.0.0.1:8088` and pass the headers as default headers.
-Set `stream: true` in the body for streaming (SSE) responses.
+For a release rollout, set `LLMGW_IMAGE_TAG` to the selected immutable release
+tag and run `docker compose pull`. Route traffic away, stop the existing
+service with `docker compose down`, verify no other `llmgw serve` instance uses
+the database or auth directory, then run `docker compose up -d`. The same
+shared configuration works for a host binary with
+`LLMGW_CONFIG=./config.yaml llmgw serve`; host-binary upgrades follow the same
+stopped-traffic cutover.
 
-## Operations
+## Provider authentication and projects
 
-### Retention
+Provider credentials belong to CLIProxyAPI's persistent auth directory, not to
+the LLMGW database. Use the local administrative commands against the shared
+configuration:
 
-A background sweep runs hourly and deletes `usage_event` rows older than 35 days plus any expired
-`reservation` rows, keeping the windowed-aggregate hot path bounded. It needs no configuration; the
-counts removed are logged at info. Graceful shutdown (SIGINT/SIGTERM) drains in-flight requests and
-stops the sweep before exit.
+```sh
+llmgw auth login claude
+llmgw auth list
+llmgw auth import-legacy
 
-### Recovering a dead session key
+llmgw key create analytics --name claude-code
+llmgw key list analytics
+llmgw key rotate KEY_ID --overlap 15m
+llmgw key revoke KEY_ID
+```
 
-The gateway bootstraps Claude Code OAuth tokens from the stored claude.ai **session key** and
-refreshes them automatically; when a refresh token dies it re-bootstraps from the session key. It
-does **not** perform interactive re-authentication. Only when the **session key itself** is revoked
-or expired (bootstrap returns 401/403, surfaced as a `DeadRefreshTokenError`) does the account stop
-serving traffic until an operator re-seeds it.
+`key create` prints the plaintext project key once. Store it in the deployed
+client's secret store. Create one key per deployed client; a project can own
+many keys. A key is mandatory for every generation and metadata request,
+including traffic arriving through Cloudflare Tunnel.
 
-To recover:
+Use either standard header form (but not conflicting values):
 
-1. Obtain a fresh claude.ai session key (`sk-ant-sid…`) for the account.
-2. Update the credential the gateway reads on the next request:
-   - **Existing DB:** set the matching `oauth_token` row's `session_key` and clear the stale derived
-     tokens (`UPDATE oauth_token SET session_key = '<new>', access_token = NULL, refresh_token = NULL WHERE account_label = '<label>';`).
-   - **Fresh DB:** set `LLMGW_SESSION_KEYS` (e.g. `label=<new-key>`); the seed runs on startup.
-3. The gateway re-bootstraps on the next request — no restart is required for the DB update.
+```sh
+curl http://127.0.0.1:8088/v1/chat/completions \
+  -H 'Authorization: Bearer LLMGW_PROJECT_KEY'
+
+curl http://127.0.0.1:8088/v1/chat/completions \
+  -H 'x-api-key: LLMGW_PROJECT_KEY'
+```
+
+Claude Code, OpenCode, and Hermes all use the same LLMGW base URL and their
+normal API-key setting; set that API-key value to the project key issued for
+that deployed client. The embedded SDK serves its supported provider protocol
+routes, including Anthropic Messages, OpenAI Chat Completions/Responses, and
+Gemini where configured.
+
+## Budgets and usage
+
+Create a project by issuing its first key, then manage its project-wide limits:
+
+```sh
+llmgw budget set analytics --dimension calls --window day --max 1000 --action block
+llmgw budget list analytics
+llmgw budget delete LIMIT_ID
+
+llmgw usage show analytics --since 24h --by model
+llmgw usage resolve REQUEST_ID --assume-zero
+```
+
+Budgets cover `calls`, `tokens`, or notional `cost` across an hourly or daily
+window. Calls are counted exactly. Token and cost budgets are admitted using
+what has already been recorded, then stop subsequent calls after a completed
+request crosses the limit; they cannot revoke an upstream request already in
+flight. Notional subscription cost is an accounting estimate, not a provider
+invoice.
+
+An abrupt crash can leave an undetectable tail of multi-attempt usage after a
+request has been admitted. Such requests are marked for accounting resolution;
+use `usage resolve REQUEST_ID --assume-zero` only after operator review and
+only when zero is the intended conservative resolution.
+
+The example's native defaults retry once (`request-retry: 1`) and try at most
+two provider credentials (`max-retry-credentials: 2`). CLIProxyAPI places
+provider/auth failures in cooldown according to its native settings. Tune
+`request-retry`, `max-retry-credentials`, `max-retry-interval`,
+`transient-error-cooldown-seconds`, and the credential pool in `config.yaml`
+to match the provider and desired latency. Preserve the required security
+settings in the example: remote management, the control panel, home, and pprof
+must remain disabled.
+
+## Network safety and rollback
+
+Cloudflare Tunnel is the recommended way to publish LLMGW, but it is a network
+control rather than client authentication: project keys remain mandatory. If
+you expose LLMGW directly, put TLS termination in front of it and restrict the
+listener/firewall as appropriate. Do not publish the Compose port on a routable
+host interface without that protection.
+
+Before the first migration-0010 upgrade, make and test a restorable PostgreSQL
+backup while the old service is stopped. Also snapshot the persistent
+CLIProxyAPI auth directory and retain the prior image tag, `config.yaml`, and
+`.env`. Migration 0010 renames the historical tables to
+`legacy_usage_event`, `legacy_budget_limit`, and `legacy_model_price`, and
+drops `reservation`; therefore an image-only rollback after 0010 is
+impossible.
+
+To return to the previous image, first route traffic away and stop every LLMGW
+instance. Restore the tested pre-0010 PostgreSQL backup before starting the
+previous image. Restore the matching auth-directory snapshot as well, or
+explicitly verify and account for every auth-file change made since the
+snapshot. Only after both state stores are compatible should you select the
+prior image tag and start the old service. `llmgw auth import-legacy` reads
+historical `oauth_token` rows without modifying them and writes compatible
+provider-auth files into the persistent auth directory; review its
+per-credential status and use `auth login` for entries marked `needs-login`.
+
+## CI and live verification
+
+Automatic CI runs formatting, vet, build, race-checked domain/adapter tests,
+and the hermetic embedded CLIProxy integration suite. It has no live provider
+credentials and does not run `test/e2e`. Operator-owned live verification is
+explicitly gated by `LLMGW_LIVE_CONFIG` and is never recreated as a GitHub
+Actions provider-token workflow.
+
+## License notice
+
+LLMGW embeds CLIProxyAPI as a library, from pristine upstream sources at the
+version pinned in `go.mod`. Its MIT license is included in
+[`third_party/CLIProxyAPI/LICENSE`](third_party/CLIProxyAPI/LICENSE); see
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for the pinned-source notice.
+
+Upgrading the SDK is a normal module upgrade — there is nothing to reapply.
+Keep `disable-image-generation` set to `true` and leave payload write rules
+empty: together they guarantee that each upstream attempt reports exactly one
+usage record, which is what the gateway's accounting relies on. Both are
+enforced at startup.

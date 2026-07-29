@@ -8,15 +8,21 @@ services:
     container_name: llmgw
     restart: unless-stopped
 
-    # All LLMGW_* configuration comes from .env (see .env.example). Copy it to .env and fill in
-    # the values before `docker compose up`.
+    # All secret values come from .env (see .env.example). Copy it to .env and
+    # fill in the values before `docker compose up`.
     env_file: .env
 
+    # This is the one shared operator configuration: native CLIProxyAPI fields
+    # at its root and LLMGW-owned settings below `llmgw`. It can contain native
+    # provider API keys, so keep the host copy mode 0600.
+    volumes:
+      - ./config.yaml:/etc/llmgw/config.yaml:ro
+      - cliproxy-auth:/var/lib/llmgw/cliproxy-auth
+
     # Local-only exposure: the gateway is published on the HOST loopback interface ONLY, never on a
-    # routable address. Inside the container the app must bind 0.0.0.0 (set LLMGW_LISTEN=0.0.0.0:8088
-    # in .env) so the docker proxy can reach it; the "127.0.0.1:" host prefix is what keeps the
-    # gateway off the network. An app binding 127.0.0.1 *inside* the container would be unreachable
-    # through a published port.
+    # routable address. The shared config binds the app to 0.0.0.0:8088 so Docker can reach it; the
+    # "127.0.0.1:" host prefix is what keeps the gateway off the network. An app binding 127.0.0.1
+    # *inside* the container would be unreachable through a published port.
     ports:
       - "127.0.0.1:8088:8088"
 
@@ -31,3 +37,6 @@ services:
     # network instead and use the Postgres service name as the DSN host.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+volumes:
+  cliproxy-auth:

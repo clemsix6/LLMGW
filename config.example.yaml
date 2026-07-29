@@ -1,0 +1,33 @@
+host: 0.0.0.0
+port: 8088
+auth-dir: /var/lib/llmgw/cliproxy-auth
+disable-image-generation: true
+
+remote-management:
+  allow-remote: false
+  secret-key: ""
+  disable-control-panel: true
+
+home:
+  enabled: false
+
+pprof:
+  enable: false
+
+request-log: false
+request-retry: 1
+max-retry-credentials: 2
+max-retry-interval: 5
+transient-error-cooldown-seconds: -1
+disable-cooling: false
+save-cooldown-status: false
+
+routing:
+  strategy: round-robin
+  session-affinity: false
+
+llmgw:
+  postgres-dsn-env: LLMGW_POSTGRES_DSN
+  key-pepper-env: LLMGW_KEY_PEPPER
+  usage-retention-days: 35
+  usage-outstanding-capacity: 64

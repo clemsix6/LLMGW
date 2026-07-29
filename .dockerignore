@@ -1,0 +1,20 @@
+# Keep operator secrets and local state out of the build context: everything
+# copied here lands in a build layer, even when the final image never uses it.
+.env
+.env.*
+!.env.example
+
+.git
+.github
+.worktrees
+.superpowers
+.claude
+
+docs
+README.md
+
+# Local build output and editor noise.
+/llmgw
+*.exe
+.DS_Store
+*.swp
