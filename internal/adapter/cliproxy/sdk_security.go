@@ -12,24 +12,6 @@ import (
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 )
 
-// BuildSecureSDK applies LLMGW's non-bypassable security policy and builds the SDK service.
-func BuildSecureSDK(
-	builder *sdkproxy.Builder,
-	cfg *sdkconfig.Config,
-	manager *sdkaccess.Manager,
-	middleware gin.HandlerFunc,
-	provider sdkaccess.Provider,
-) (*sdkproxy.Service, func(), error) {
-	return buildSecureSDKWithAfterStart(
-		builder,
-		cfg,
-		manager,
-		middleware,
-		provider,
-		nil,
-	)
-}
-
 // buildSecureSDKWithAfterStart builds the secure SDK and exposes established startup internally.
 func buildSecureSDKWithAfterStart(
 	builder *sdkproxy.Builder,

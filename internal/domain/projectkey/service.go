@@ -144,27 +144,6 @@ func (s *Service) Revoke(ctx context.Context, keyID int64) error {
 	return nil
 }
 
-// List returns digest-free key metadata for one project or every project.
-func (s *Service) List(ctx context.Context, project string) ([]governance.KeyInfo, error) {
-	var err error
-	if project != "" {
-		project, err = normalizeLabel("project", project)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	keys, err := s.repo.ListKeys(ctx, project)
-	if err != nil {
-		return nil, fmt.Errorf("list project keys:\n%w", err)
-	}
-	infos := make([]governance.KeyInfo, 0, len(keys))
-	for _, key := range keys {
-		infos = append(infos, keyInfo(key))
-	}
-	return infos, nil
-}
-
 // normalizeLabel trims and validates one operator-controlled label.
 func normalizeLabel(kind string, value string) (string, error) {
 	value = strings.TrimSpace(value)

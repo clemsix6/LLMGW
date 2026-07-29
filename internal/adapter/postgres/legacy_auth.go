@@ -10,7 +10,7 @@ import (
 // LegacyCredentials reads historical provider credentials without modifying their source rows.
 func (s *Store) LegacyCredentials(ctx context.Context) ([]governance.LegacyCredential, error) {
 	const query = `
-SELECT p.type, o.account_label, o.access_token, o.refresh_token, o.session_key,
+SELECT p.type, o.account_label, o.access_token, o.refresh_token,
        o.chatgpt_account_id, o.expires_at
 FROM oauth_token o
 JOIN provider p ON p.id = o.provider_id
@@ -23,8 +23,8 @@ ORDER BY p.type, o.account_label`
 	credentials := make([]governance.LegacyCredential, 0)
 	for rows.Next() {
 		var credential governance.LegacyCredential
-		var access, refresh, sessionKey, accountID *string
-		if err := rows.Scan(&credential.Provider, &credential.AccountLabel, &access, &refresh, &sessionKey, &accountID, &credential.ExpiresAt); err != nil {
+		var access, refresh, accountID *string
+		if err := rows.Scan(&credential.Provider, &credential.AccountLabel, &access, &refresh, &accountID, &credential.ExpiresAt); err != nil {
 			return nil, fmt.Errorf("scan legacy credential:\n%w", err)
 		}
 		if access != nil {
@@ -32,9 +32,6 @@ ORDER BY p.type, o.account_label`
 		}
 		if refresh != nil {
 			credential.RefreshToken = *refresh
-		}
-		if sessionKey != nil {
-			credential.SessionKey = *sessionKey
 		}
 		if accountID != nil {
 			credential.ChatGPTAccountID = *accountID

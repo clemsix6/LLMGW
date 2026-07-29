@@ -5,7 +5,6 @@ import (
 	"context"
 	"strings"
 	"sync"
-	"testing"
 	"time"
 
 	sdkusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
@@ -36,20 +35,6 @@ func (c *usageCapture) HandleUsage(_ context.Context, record sdkusage.Record) {
 	}:
 	default:
 	}
-}
-
-// awaitObservation waits for the next immutable SDK usage principal.
-func (c *usageCapture) awaitObservation(t *testing.T) usageObservation {
-	t.Helper()
-	timer := time.NewTimer(5 * time.Second)
-	defer timer.Stop()
-	select {
-	case observation := <-c.observations:
-		return observation
-	case <-timer.C:
-		t.Fatal("SDK usage event was not observed")
-	}
-	return usageObservation{}
 }
 
 // lockedBuffer is a concurrency-safe log destination.

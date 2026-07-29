@@ -13,6 +13,7 @@
 
 # Isolated implementation worktrees
 /.worktrees/
+/.claude/worktrees/
 
 # OS / editor
 .DS_Store

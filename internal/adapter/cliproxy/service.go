@@ -24,13 +24,7 @@ func NewService(
 	usagePlugin *UsagePlugin,
 	plugins ...sdkusage.Plugin,
 ) (*Service, error) {
-	return newService(
-		cfg,
-		middleware,
-		usagePlugin,
-		serviceConstructionHooks{},
-		plugins...,
-	)
+	return newService(cfg, middleware, usagePlugin, plugins...)
 }
 
 // constructedSDK is the SDK surface required after a successful Build.
@@ -41,30 +35,22 @@ type constructedSDK interface {
 	RegisterUsagePlugin(sdkusage.Plugin)
 }
 
-// serviceConstructionHooks supplies isolated failure seams to lifecycle tests.
-type serviceConstructionHooks struct {
-	process  *sdkProcessState                                 // process overrides the package-global lease owner.
-	snapshot func(config.Config) (*sdkStartupSnapshot, error) // snapshot freezes SDK inputs.
-	build    func() (constructedSDK, func(), error)           // build constructs the secured SDK.
-}
-
-// newService builds one service with optional private construction seams.
+// newService builds one service bound to the embedded SDK.
 func newService(
 	cfg config.Config,
 	middleware *Middleware,
 	usagePlugin *UsagePlugin,
-	hooks serviceConstructionHooks,
 	plugins ...sdkusage.Plugin,
 ) (*Service, error) {
 	if err := validateServiceComposition(cfg, middleware, usagePlugin, plugins); err != nil {
 		return nil, err
 	}
-	process := constructionProcess(hooks)
+	process := defaultSDKProcessState
 	lease, err := process.reserveConstruction()
 	if err != nil {
 		return nil, fmt.Errorf("construct embedded CLIProxyAPI service:\n%w", err)
 	}
-	startup, err := constructionSnapshot(hooks)(cfg)
+	startup, err := newSDKStartupSnapshot(cfg)
 	if err != nil {
 		process.releaseConstruction(lease)
 		return nil, fmt.Errorf("construct embedded CLIProxyAPI service:\n%w", err)
@@ -73,7 +59,7 @@ func newService(
 	started := make(chan struct{})
 	middleware.serveWhenReady(started)
 	var service *Service
-	build := serviceBuild(hooks, startup, middleware, &service, started)
+	build := serviceBuild(startup, middleware, &service, started)
 	proxy, clearAccess, err := build()
 	if err != nil {
 		return failServiceBuild(process, lease, startup, err)
@@ -114,35 +100,13 @@ func validateServiceComposition(
 	return nil
 }
 
-// constructionProcess selects the production or isolated lease owner.
-func constructionProcess(hooks serviceConstructionHooks) *sdkProcessState {
-	if hooks.process != nil {
-		return hooks.process
-	}
-	return defaultSDKProcessState
-}
-
-// constructionSnapshot selects the production or isolated snapshotter.
-func constructionSnapshot(
-	hooks serviceConstructionHooks,
-) func(config.Config) (*sdkStartupSnapshot, error) {
-	if hooks.snapshot != nil {
-		return hooks.snapshot
-	}
-	return newSDKStartupSnapshot
-}
-
-// serviceBuild selects the production secured SDK build or a failure seam.
+// serviceBuild builds the secured SDK bound to this service.
 func serviceBuild(
-	hooks serviceConstructionHooks,
 	startup *sdkStartupSnapshot,
 	middleware *Middleware,
 	owner **Service,
 	started chan struct{},
 ) func() (constructedSDK, func(), error) {
-	if hooks.build != nil {
-		return hooks.build
-	}
 	frozen := startup.config
 	builder := sdkproxy.NewBuilder().
 		WithConfigPath(frozen.Path).
