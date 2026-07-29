@@ -64,6 +64,31 @@ func TestPriceRuleFor(t *testing.T) {
 		}
 	})
 
+	// A null cache rate is not free: cost.Calculate reports unknown pricing as
+	// soon as a bucket carries tokens without a rate, and unknown pricing blocks
+	// an active cost budget. Anthropic reports cache reads on nearly every
+	// request, so a gap here refuses every priced project.
+	t.Run("seeded rules price every canonical bucket", func(t *testing.T) {
+		for _, model := range []string{
+			"claude-haiku-4-5-20251001",
+			"claude-opus-4-8-20260115",
+			"gpt-5-codex-20251201",
+		} {
+			rule, found, err := store.PriceRuleFor(ctx, "claude", model, "standard", requestedAt)
+			if err != nil || !found {
+				t.Fatalf("PriceRuleFor(%s) = (found %t, %v)", model, found, err)
+			}
+			if rule.CacheReadPerMillion == nil || rule.CacheCreationPerMillion == nil ||
+				rule.OutputPerMillion == nil {
+				t.Fatalf("PriceRuleFor(%s) leaves a bucket unpriced: %#v", model, rule)
+			}
+			if *rule.CacheReadPerMillion <= 0 {
+				t.Fatalf("PriceRuleFor(%s) cache read rate = %v, want positive",
+					model, *rule.CacheReadPerMillion)
+			}
+		}
+	})
+
 	t.Run("no matching rule", func(t *testing.T) {
 		rule, found, err := store.PriceRuleFor(
 			ctx,
