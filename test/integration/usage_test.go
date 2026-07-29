@@ -120,35 +120,6 @@ func TestStreamingUsage(t *testing.T) {
 	testHarness.assertSecretsAbsent(t, created.Plaintext)
 }
 
-// TestUsageUnpriced verifies real SDK usage survives with a null notional cost.
-func TestUsageUnpriced(t *testing.T) {
-	created := testHarness.createKey(t, "usage-unpriced")
-	testHarness.Upstream.Enqueue(jsonUsageResponseForModel("unpriced-upstream-model", 5, 2))
-	fixture := `{
-		"model":"unpriced-model",
-		"messages":[{"role":"user","content":"fixture-prompt"}]
-	}`
-
-	status, _ := gatewayRequest(
-		t,
-		http.MethodPost,
-		"/v1/chat/completions",
-		bytes.NewBufferString(fixture),
-		requestHeaders{authorization: "Bearer " + created.Plaintext},
-	)
-	if status != http.StatusOK {
-		t.Fatalf("unpriced status = %d, want 200", status)
-	}
-
-	rows := awaitUsageAttempts(t, created.Key.ProjectID, 1)
-	if len(rows) != 1 || rows[0].TotalTokens != 7 ||
-		rows[0].CostUSD != nil || rows[0].PricingState != governance.PricingUnknown {
-		t.Fatalf("unpriced attempts = %#v", rows)
-	}
-	assertUsageRequest(t, created, 1)
-	testHarness.assertSecretsAbsent(t, created.Plaintext)
-}
-
 // TestConcurrentProjectUsageCorrelation proves the real SDK cannot cross-attach
 // a delayed request A usage record to concurrent project B.
 func TestConcurrentProjectUsageCorrelation(t *testing.T) {

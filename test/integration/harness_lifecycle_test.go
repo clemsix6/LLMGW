@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"testing"
 	"time"
 )
 
@@ -16,16 +15,6 @@ func safeBodySummary(body []byte) string {
 		body = body[:maximum]
 	}
 	return string(body)
-}
-
-// awaitSignal waits for a bounded integration lifecycle signal.
-func awaitSignal(t *testing.T, signal <-chan struct{}, failure string) {
-	t.Helper()
-	select {
-	case <-signal:
-	case <-time.After(5 * time.Second):
-		t.Fatal(failure)
-	}
 }
 
 // stopService cancels and waits for the single embedded SDK lifecycle.

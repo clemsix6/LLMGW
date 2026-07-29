@@ -1,17 +1,13 @@
 package integration
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
-	"time"
 )
 
 // StubResponse describes one deterministic upstream response.
@@ -61,27 +57,6 @@ func (s *StubUpstream) Enqueue(responses ...StubResponse) {
 	s.mu.Lock()
 	s.scripts = append(s.scripts, responses...)
 	s.mu.Unlock()
-}
-
-// Authorizations returns captured upstream authorization values without logging them.
-func (s *StubUpstream) Authorizations() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]string(nil), s.authorizations...)
-}
-
-// RequestCount returns the exact number of requests observed by the stub.
-func (s *StubUpstream) RequestCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return len(s.authorizations)
-}
-
-// ResponseStatuses returns the exact upstream statuses served so far.
-func (s *StubUpstream) ResponseStatuses() []int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]int(nil), s.statuses...)
 }
 
 // Close stops the local upstream.
@@ -198,48 +173,6 @@ func defaultStubResponse() StubResponse {
 			"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}
 		}`,
 	}
-}
-
-// budgetHTTPResult carries a worker result to parent-owned assertions.
-type budgetHTTPResult struct {
-	status int    // status is the downstream response status.
-	body   []byte // body is the bounded downstream response body.
-	err    error  // err reports construction, transport, or body-read failure.
-}
-
-// generationHTTPResult drives one real request without calling testing helpers.
-func generationHTTPResult(ctx context.Context, plaintext string, model string) budgetHTTPResult {
-	body := `{"model":"` + model + `","messages":[{"role":"user","content":"fixture-prompt"}]}`
-	request, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodPost,
-		testHarness.BaseURL+"/v1/chat/completions",
-		bytes.NewBufferString(body),
-	)
-	if err != nil {
-		return budgetHTTPResult{err: fmt.Errorf("create generation request: %w", err)}
-	}
-	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("Authorization", "Bearer "+plaintext)
-	response, err := testHarness.client.Do(request)
-	if err != nil {
-		return budgetHTTPResult{err: fmt.Errorf("send generation request: %w", err)}
-	}
-	defer response.Body.Close()
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
-	if err != nil {
-		return budgetHTTPResult{err: fmt.Errorf("read generation response: %w", err)}
-	}
-	return budgetHTTPResult{status: response.StatusCode, body: responseBody}
-}
-
-// startGenerationWorker starts one bounded request and never touches testing.T.
-func startGenerationWorker(results chan<- budgetHTTPResult, plaintext string, model string) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		results <- generationHTTPResult(ctx, plaintext, model)
-	}()
 }
 
 // sseFrame is one fully delimited server-sent event.

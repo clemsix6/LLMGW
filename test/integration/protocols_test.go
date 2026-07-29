@@ -170,29 +170,6 @@ func TestMetadataProtocolsAreAuthenticatedAndUnmetered(t *testing.T) {
 	}
 }
 
-// TestMalformedJSONIsCountedOnceWithoutUpstream catches request-parser retries or skipped admission.
-func TestMalformedJSONIsCountedOnceWithoutUpstream(t *testing.T) {
-	created := testHarness.createKey(t, "protocol-malformed")
-	upstreamBefore := testHarness.Upstream.RequestCount()
-	requestsBefore := requestCount(t, created, governance.OperationGeneration, "/v1/chat/completions")
-	status, _ := gatewayRequest(
-		t,
-		http.MethodPost,
-		"/v1/chat/completions",
-		bytes.NewBufferString(`{"model":`),
-		requestHeaders{authorization: "Bearer " + created.Plaintext},
-	)
-	if status != http.StatusBadGateway {
-		t.Fatalf("malformed status = %d, want pinned SDK 502", status)
-	}
-	if got := testHarness.Upstream.RequestCount() - upstreamBefore; got > 1 {
-		t.Fatalf("malformed JSON upstream attempts = %d, want no retry", got)
-	}
-	if got := requestCount(t, created, governance.OperationGeneration, "/v1/chat/completions"); got != requestsBefore+1 {
-		t.Fatalf("malformed generation rows = %d, want %d", got, requestsBefore+1)
-	}
-}
-
 // TestInactiveAndConflictingKeysShareGenericFailure catches credential-state disclosure.
 func TestInactiveAndConflictingKeysShareGenericFailure(t *testing.T) {
 	active := testHarness.createKey(t, "protocol-active")

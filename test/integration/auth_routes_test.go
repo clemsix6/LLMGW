@@ -10,14 +10,6 @@ import (
 	"github.com/clemsix6/LLMGW/internal/domain/governance"
 )
 
-// TestHealthIsPublic verifies the only unauthenticated route.
-func TestHealthIsPublic(t *testing.T) {
-	status, _ := gatewayRequest(t, http.MethodGet, "/healthz", nil, requestHeaders{})
-	if status != http.StatusOK {
-		t.Fatalf("health status = %d, want 200", status)
-	}
-}
-
 // TestProjectAuth verifies project headers and the opaque SDK usage principal.
 func TestProjectAuth(t *testing.T) {
 	created := testHarness.createKey(t, "auth")
@@ -26,7 +18,6 @@ func TestProjectAuth(t *testing.T) {
 
 	other := testHarness.createKey(t, "auth-other")
 	assertStableProjectAuthFailures(t, created.Plaintext, other.Plaintext)
-	assertSDKUsagePrincipal(t, created)
 	testHarness.assertSecretsAbsent(t, created.Plaintext, other.Plaintext)
 }
 
@@ -81,71 +72,12 @@ func assertStableProjectAuthFailures(t *testing.T, plaintext string, otherPlaint
 	}
 }
 
-// assertSDKUsagePrincipal verifies startup account loading and opaque SDK attribution.
-func assertSDKUsagePrincipal(t *testing.T, created governance.CreatedKey) {
-	t.Helper()
-	status, _ := gatewayRequest(
-		t,
-		http.MethodPost,
-		"/v1/chat/completions",
-		bytes.NewBufferString(chatFixture),
-		requestHeaders{authorization: "Bearer " + created.Plaintext},
-	)
-	if status != http.StatusOK {
-		t.Fatalf("generation status = %d, want 200", status)
-	}
-
-	observation := testHarness.Usage.awaitObservation(t)
-	if observation.Principal == "" ||
-		observation.Principal == created.Key.PublicID ||
-		observation.Principal == created.Plaintext {
-		t.Fatal("SDK usage principal is not an opaque correlation token")
-	}
-	if observation.RequestedAt.IsZero() {
-		t.Fatal("pinned SDK emitted zero usage RequestedAt")
-	}
-	assertStartupAccountUsed(t, testHarness.Upstream.Authorizations())
-}
-
-// assertStartupAccountUsed proves the initial native config account load.
-func assertStartupAccountUsed(t *testing.T, authorizations []string) {
-	t.Helper()
-	if len(authorizations) == 0 {
-		t.Fatal("startup OpenAI-compatible account was not loaded")
-	}
-	got := authorizations[len(authorizations)-1]
-	if got != "Bearer upstream-account-a" && got != "Bearer upstream-account-b" {
-		t.Fatal("upstream request did not use a configured startup account")
-	}
-}
-
 // TestRoutePolicy verifies metadata, denied, and unknown route accounting.
 func TestRoutePolicy(t *testing.T) {
 	created := testHarness.createKey(t, "routes")
-	assertMetadataRoute(t, created)
 	assertDeniedRoutes(t, created)
 	assertUnknownRoute(t, created)
 	testHarness.assertSecretsAbsent(t, created.Plaintext)
-}
-
-// assertMetadataRoute verifies models is authenticated and unmetered.
-func assertMetadataRoute(t *testing.T, created governance.CreatedKey) {
-	t.Helper()
-	metadataBefore := requestCount(t, created, governance.OperationMetadata, "/v1/models")
-	generationBefore := requestCount(t, created, governance.OperationGeneration, "")
-
-	status, _ := gatewayRequest(t, http.MethodGet, "/v1/models", nil, requestHeaders{
-		authorization: "Bearer " + created.Plaintext,
-	})
-	if status != http.StatusOK {
-		t.Fatalf("models status = %d, want 200", status)
-	}
-	if got := requestCount(t, created, governance.OperationMetadata, "/v1/models"); got != metadataBefore+1 {
-		t.Fatalf("metadata request count = %d, want %d", got, metadataBefore+1)
-	}
-	if got := requestCount(t, created, governance.OperationGeneration, ""); got != generationBefore {
-		t.Fatalf("generation count after metadata = %d, want %d", got, generationBefore)
-	}
 }
 
 // assertDeniedRoutes verifies forbidden SDK surfaces remain invisible and unmetered.

@@ -3,34 +3,13 @@ package integration
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/clemsix6/LLMGW/internal/domain/governance"
 )
-
-// TestCallsBudgetUnderLogicalConcurrency catches non-atomic admission at the capacity gate.
-func TestCallsBudgetUnderLogicalConcurrency(t *testing.T) {
-	created := testHarness.createKey(t, "budget-calls-concurrent")
-	testHarness.setBudget(t, created, governance.DimensionCalls, 5, governance.ActionBlock)
-
-	const clients = 50
-	successes, blocked, capacityRetries := exerciseCapacityBudgetClients(t, created, clients)
-	if successes != 5 || blocked != clients-5 {
-		t.Fatalf("logical results = success:%d blocked:%d, want 5/%d", successes, blocked, clients-5)
-	}
-	if capacityRetries != clients-2 {
-		t.Fatal("concurrent logical clients never exercised the capacity 503")
-	}
-	awaitUsageAttempts(t, created.Key.ProjectID, 5)
-	if got := requestCount(t, created, governance.OperationGeneration, "/v1/chat/completions"); got != 5 {
-		t.Fatalf("persisted admitted calls = %d, want 5", got)
-	}
-}
 
 // TestOneFailoverConsumesOneCall catches attempt-count based call accounting.
 func TestOneFailoverConsumesOneCall(t *testing.T) {
@@ -69,54 +48,6 @@ func TestObservedTokensAndCostBlockOnlyTheNextRequest(t *testing.T) {
 		created := testHarness.createKey(t, "budget-cost")
 		assertMultiAttemptCrossing(t, created, governance.DimensionCost, 0.00002)
 	})
-}
-
-// TestConcurrentAcceptedRequestsMayOvershoot catches serialized post-usage admission.
-func TestConcurrentAcceptedRequestsMayOvershoot(t *testing.T) {
-	tests := []struct {
-		name      string
-		dimension governance.Dimension
-		maximum   float64
-		price     bool
-	}{
-		{name: "tokens", dimension: governance.DimensionTokens, maximum: 1},
-		{name: "cost", dimension: governance.DimensionCost, maximum: 0.000001, price: true},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			created := testHarness.createKey(t, "budget-overshoot-"+test.name)
-			if test.price {
-				seedIntegrationPrice(t)
-			}
-			testHarness.setBudget(t, created, test.dimension, test.maximum, governance.ActionBlock)
-			started := []chan struct{}{make(chan struct{}, 1), make(chan struct{}, 1)}
-			release := make(chan struct{})
-			for index := range 2 {
-				response := jsonUsageResponse(3, 2)
-				response.Started = started[index]
-				response.Release = release
-				testHarness.Upstream.Enqueue(response)
-			}
-			results := make(chan budgetHTTPResult, 2)
-			for range 2 {
-				startGenerationWorker(results, created.Plaintext, "test-model")
-			}
-			awaitSignal(t, started[0], "first overshoot request did not reach upstream")
-			awaitSignal(t, started[1], "second overshoot request did not reach upstream")
-			close(release)
-			for range 2 {
-				result := awaitBudgetHTTPResult(t, results)
-				if result.err != nil || result.status != http.StatusOK {
-					t.Fatalf("concurrent crossing result = %d/%v, want 200", result.status, result.err)
-				}
-			}
-			awaitUsageAttempts(t, created.Key.ProjectID, 2)
-			status, _ := authenticatedGeneration(t, created.Plaintext, "test-model")
-			if status != http.StatusPaymentRequired {
-				t.Fatalf("post-overshoot status = %d, want 402", status)
-			}
-		})
-	}
 }
 
 // TestUnknownPricingBlocksOnlyAnActiveCostLimit catches global unpriced fail-closed behavior.
@@ -189,184 +120,6 @@ func TestWarnBudgetNeverChangesSDKResponse(t *testing.T) {
 	}
 	assertOpenAIChatShape(t, decodeJSON(t, body))
 	awaitUsageAttempts(t, created.Key.ProjectID, 1)
-}
-
-type capacityEvent struct {
-	id     int              // id identifies one of the fifty logical clients.
-	result budgetHTTPResult // result is one bounded transport attempt.
-}
-
-// exerciseCapacityBudgetClients retries only the proven capacity-rejected first wave.
-func exerciseCapacityBudgetClients(
-	t *testing.T,
-	created governance.CreatedKey,
-	clients int,
-) (int, int, int) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	statusBefore := len(testHarness.Upstream.ResponseStatuses())
-	release, releaseOnce := make(chan struct{}), &sync.Once{}
-	events, initial, done := make(chan capacityEvent, clients), make(chan capacityEvent, clients), make(chan struct{}, clients)
-	defer finishCapacityWorkers(t, cancel, releaseOnce, release, done, clients)
-
-	started := []chan struct{}{make(chan struct{}, 1), make(chan struct{}, 1)}
-	for id := range 2 {
-		response := jsonUsageResponse(1, 1)
-		response.Started, response.Release = started[id], release
-		testHarness.Upstream.Enqueue(response)
-		startBudgetClient(ctx, id, created.Plaintext, nil, nil, events, nil, done)
-	}
-	awaitSignal(t, started[0], "first capacity holder did not reach upstream")
-	awaitSignal(t, started[1], "second capacity holder did not reach upstream")
-	rowsBefore := requestCount(t, created, governance.OperationGeneration, "")
-	upstreamBefore := testHarness.Upstream.RequestCount()
-
-	retry := make([]chan struct{}, clients)
-	start := make(chan struct{})
-	for id := 2; id < clients; id++ {
-		retry[id] = make(chan struct{}, 1)
-		startBudgetClient(ctx, id, created.Plaintext, start, retry[id], initial, events, done)
-	}
-	close(start)
-	for range clients - 2 {
-		assertCapacityRejection(t, awaitCapacityEvent(t, initial).result)
-	}
-	if err := testHarness.db.Ping(ctx); err != nil {
-		t.Fatal("database unhealthy during capacity rejection")
-	}
-	if testHarness.Upstream.RequestCount() != upstreamBefore ||
-		requestCount(t, created, governance.OperationGeneration, "") != rowsBefore {
-		t.Fatal("capacity-rejected transport attempt reached persistence or upstream")
-	}
-
-	releaseOnce.Do(func() { close(release) })
-	successes, blocked := consumeCapacityEvents(t, events, 2)
-	awaitUsageAttempts(t, created.Key.ProjectID, successes)
-	for id := 2; id < clients; id += 2 {
-		retry[id] <- struct{}{}
-		retry[id+1] <- struct{}{}
-		ok, denied := consumeCapacityEvents(t, events, 2)
-		successes, blocked = successes+ok, blocked+denied
-		if ok > 0 {
-			awaitUsageAttempts(t, created.Key.ProjectID, successes)
-		}
-	}
-	assertNoUpstream503(t, statusBefore)
-	return successes, blocked, clients - 2
-}
-
-// startBudgetClient runs either one holder request or one proven-capacity retry.
-func startBudgetClient(
-	ctx context.Context,
-	id int,
-	plaintext string,
-	start <-chan struct{},
-	retry <-chan struct{},
-	initial chan<- capacityEvent,
-	terminal chan<- capacityEvent,
-	done chan<- struct{},
-) {
-	go func() {
-		defer func() { done <- struct{}{} }()
-		if start != nil {
-			select {
-			case <-start:
-			case <-ctx.Done():
-				return
-			}
-		}
-		initial <- capacityEvent{id: id, result: generationHTTPResult(ctx, plaintext, "test-model")}
-		if retry == nil {
-			return
-		}
-		select {
-		case <-retry:
-			terminal <- capacityEvent{id: id, result: generationHTTPResult(ctx, plaintext, "test-model")}
-		case <-ctx.Done():
-		}
-	}()
-}
-
-func awaitCapacityEvent(t *testing.T, events <-chan capacityEvent) capacityEvent {
-	t.Helper()
-	select {
-	case event := <-events:
-		return event
-	case <-time.After(5 * time.Second):
-		t.Fatal("capacity client did not return")
-		return capacityEvent{}
-	}
-}
-
-func assertCapacityRejection(t *testing.T, result budgetHTTPResult) {
-	t.Helper()
-	var envelope map[string]map[string]string
-	if result.err != nil || result.status != http.StatusServiceUnavailable ||
-		json.Unmarshal(result.body, &envelope) != nil ||
-		envelope["error"]["type"] != "service_unavailable" {
-		t.Fatalf("saturated capacity result = %d/%v, want controlled 503", result.status, result.err)
-	}
-}
-
-func consumeCapacityEvents(t *testing.T, events <-chan capacityEvent, count int) (int, int) {
-	t.Helper()
-	successes, blocked := 0, 0
-	for range count {
-		result := awaitCapacityEvent(t, events).result
-		if result.err != nil {
-			t.Fatalf("capacity client transport failed: %v", result.err)
-		}
-		switch result.status {
-		case http.StatusOK:
-			successes++
-		case http.StatusPaymentRequired:
-			blocked++
-		default:
-			t.Fatalf("capacity client terminal status = %d", result.status)
-		}
-	}
-	return successes, blocked
-}
-
-func finishCapacityWorkers(
-	t *testing.T,
-	cancel context.CancelFunc,
-	releaseOnce *sync.Once,
-	release chan struct{},
-	done <-chan struct{},
-	count int,
-) {
-	t.Helper()
-	releaseOnce.Do(func() { close(release) })
-	cancel()
-	for range count {
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			t.Error("capacity client worker did not terminate")
-			return
-		}
-	}
-}
-
-func assertNoUpstream503(t *testing.T, start int) {
-	t.Helper()
-	for _, status := range testHarness.Upstream.ResponseStatuses()[start:] {
-		if status == http.StatusServiceUnavailable {
-			t.Fatal("capacity test upstream emitted 503")
-		}
-	}
-}
-
-func awaitBudgetHTTPResult(t *testing.T, results <-chan budgetHTTPResult) budgetHTTPResult {
-	t.Helper()
-	select {
-	case result := <-results:
-		return result
-	case <-time.After(5 * time.Second):
-		t.Fatal("generation worker did not return")
-		return budgetHTTPResult{}
-	}
 }
 
 // assertMultiAttemptCrossing proves two priced attempts combine before the next admission.

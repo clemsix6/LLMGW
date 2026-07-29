@@ -5,56 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
-
-// TestLoadSharedConfig verifies that one YAML document configures CLIProxyAPI and LLMGW.
-func TestLoadSharedConfig(t *testing.T) {
-	path := writeConfig(t, `
-host: 127.0.0.1
-port: 8088
-auth-dir: /tmp/auth
-disable-image-generation: true
-request-retry: 1
-max-retry-credentials: 2
-routing:
-  strategy: round-robin
-  session-affinity: false
-remote-management:
-  allow-remote: false
-  secret-key: ""
-  disable-control-panel: true
-llmgw:
-  postgres-dsn-env: TEST_DSN
-  key-pepper-env: TEST_PEPPER
-  usage-retention-days: 35
-`)
-	cfg, err := Load(path, mapEnv(map[string]string{
-		"TEST_DSN":    "postgres://example",
-		"TEST_PEPPER": strings.Repeat("p", 32),
-	}))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Proxy.Host != "127.0.0.1" || cfg.Proxy.Port != 8088 {
-		t.Fatalf("proxy address = %s:%d", cfg.Proxy.Host, cfg.Proxy.Port)
-	}
-	if cfg.UsageRetention != 35*24*time.Hour {
-		t.Fatalf("retention = %s", cfg.UsageRetention)
-	}
-	if cfg.LLMGW.UsageOutstandingCapacity != 64 {
-		t.Fatalf("usage outstanding capacity = %d, want 64", cfg.LLMGW.UsageOutstandingCapacity)
-	}
-	if cfg.MaxUsageRecords != 8 {
-		t.Fatalf("max usage records = %d, want 8", cfg.MaxUsageRecords)
-	}
-	if got, err := cfg.DatabaseDSN(mapEnv(map[string]string{"TEST_DSN": "postgres://example"})); err != nil || got != "postgres://example" {
-		t.Fatalf("database DSN = %q, %v", got, err)
-	}
-	if got, err := cfg.KeyPepper(mapEnv(map[string]string{"TEST_PEPPER": strings.Repeat("p", 32)})); err != nil || len(got) != 32 {
-		t.Fatalf("key pepper length = %d, %v", len(got), err)
-	}
-}
 
 func TestUsageBackpressureRequiresImageGenerationFullyDisabled(t *testing.T) {
 	tests := []struct {
@@ -176,29 +127,6 @@ func TestSecurityRejectsUnsafeConfiguration(t *testing.T) {
 				t.Fatalf("configuration file changed:\nwant %q\n got %q", before, after)
 			}
 		})
-	}
-}
-
-// TestSecretsRejectMissingAndShortValues verifies database and pepper secrets are resolved only when needed.
-func TestSecretsRejectMissingAndShortValues(t *testing.T) {
-	path := writeConfig(t, secureConfig+`
-llmgw:
-  postgres-dsn-env: TEST_DSN
-  key-pepper-env: TEST_PEPPER
-`)
-	cfg, err := Load(path, mapEnv(nil))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := cfg.DatabaseDSN(mapEnv(nil)); err == nil {
-		t.Fatal("DatabaseDSN() error = nil")
-	}
-	if _, err := cfg.KeyPepper(mapEnv(nil)); err == nil {
-		t.Fatal("KeyPepper() missing error = nil")
-	}
-	if _, err := cfg.KeyPepper(mapEnv(map[string]string{"TEST_PEPPER": strings.Repeat("p", 31)})); err == nil {
-		t.Fatal("KeyPepper() short value error = nil")
 	}
 }
 

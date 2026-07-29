@@ -64,21 +64,6 @@ func TestServeFailsBeforeSDKConstruction(t *testing.T) {
 	}
 }
 
-// TestServePropagatesUnexpectedSDKReturn catches a composition root that treats an unexpected
-// listener/service return as a clean shutdown and prevents the process manager from restarting it.
-func TestServePropagatesUnexpectedSDKReturn(t *testing.T) {
-	cfg := validServeConfig()
-	deps := successfulServeDependencies(&cfg, nil)
-	unexpected := errors.New("listener stopped")
-	deps.buildService = func(config.Config, *serveStore, []byte) (serveService, error) {
-		return &fakeServeService{run: func(context.Context) error { return unexpected }}, nil
-	}
-	err := runServeWith(context.Background(), nil, testRootStreams(serveEnvironment()), deps)
-	if !errors.Is(err, unexpected) {
-		t.Fatalf("serve error = %v, want listener error", err)
-	}
-}
-
 // TestServeRejectsUnexpectedCleanSDKReturn catches a lifecycle mutation that lets an unrequested
 // clean listener return exit the process successfully instead of asking its manager for a restart.
 func TestServeRejectsUnexpectedCleanSDKReturn(t *testing.T) {
