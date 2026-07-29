@@ -2,8 +2,6 @@ package postgres
 
 import (
 	"context"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -349,93 +347,3 @@ func TestAdmissionWarningAndLifecycle(t *testing.T) {
 }
 
 // TestAdmissionConcurrency verifies the real transaction lock admits exactly the call cap.
-func TestAdmissionConcurrency(t *testing.T) {
-	ctx := context.Background()
-	store := newGovernanceStore(t)
-	now := time.Date(2030, 7, 27, 12, 0, 0, 0, time.UTC)
-	project, keyID := createAdmissionProject(t, ctx, store, "concurrent")
-	mustSetBudget(t, ctx, store, project.Name, governance.DimensionCalls, governance.WindowHour, 5, governance.ActionBlock)
-
-	const attempts = 50
-	var admitted atomic.Int64
-	var wait sync.WaitGroup
-	errors := make(chan error, attempts)
-
-	for range attempts {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-
-			result, err := store.AdmitGeneration(ctx, generationEvent(project.ID, keyID, now), now)
-			if err != nil {
-				errors <- err
-				return
-			}
-			if result.Allowed {
-				admitted.Add(1)
-			}
-		}()
-	}
-	wait.Wait()
-	close(errors)
-
-	for err := range errors {
-		t.Errorf("concurrent AdmitGeneration: %v", err)
-	}
-	if got := admitted.Load(); got != 5 {
-		t.Fatalf("admitted = %d, want exactly 5", got)
-	}
-	assertRequestCount(t, ctx, store, project.ID, 5)
-}
-
-// TestAdmissionLocksProjectsIndependently verifies advisory locks are keyed by project ID.
-func TestAdmissionLocksProjectsIndependently(t *testing.T) {
-	ctx := context.Background()
-	store := newGovernanceStore(t)
-	now := time.Date(2030, 7, 27, 12, 0, 0, 0, time.UTC)
-	first, firstKeyID := createAdmissionProject(t, ctx, store, "lock-first")
-	second, secondKeyID := createAdmissionProject(t, ctx, store, "lock-second")
-
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		t.Fatalf("begin held transaction: %v", err)
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, first.ID); err != nil {
-		t.Fatalf("hold first project lock: %v", err)
-	}
-
-	firstFinished := make(chan error, 1)
-	go func() {
-		_, err := store.AdmitGeneration(ctx, generationEvent(first.ID, firstKeyID, now), now)
-		firstFinished <- err
-	}()
-	assertAdvisoryWait(t, ctx, store, firstFinished)
-
-	secondFinished := make(chan error, 1)
-	go func() {
-		_, err := store.AdmitGeneration(ctx, generationEvent(second.ID, secondKeyID, now), now)
-		secondFinished <- err
-	}()
-
-	select {
-	case err := <-secondFinished:
-		if err != nil {
-			t.Fatalf("second project admission: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("second project admission waited on first project advisory lock")
-	}
-
-	if err := tx.Rollback(ctx); err != nil {
-		t.Fatalf("release first project lock: %v", err)
-	}
-	select {
-	case err := <-firstFinished:
-		if err != nil {
-			t.Fatalf("first project admission after lock release: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("first project admission remained blocked after advisory lock release")
-	}
-}

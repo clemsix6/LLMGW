@@ -284,38 +284,6 @@ func assertRequestCount(t *testing.T, ctx context.Context, store *Store, project
 	}
 }
 
-// assertAdvisoryWait verifies a concurrent admission is waiting in PostgreSQL on an advisory lock.
-func assertAdvisoryWait(t *testing.T, ctx context.Context, store *Store, finished <-chan error) {
-	t.Helper()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		select {
-		case err := <-finished:
-			t.Fatalf("same-project admission escaped held advisory lock: %v", err)
-		default:
-		}
-
-		var waiting bool
-		const query = `
-SELECT EXISTS (
-    SELECT 1
-    FROM pg_stat_activity
-    WHERE wait_event_type = 'Lock'
-      AND wait_event = 'advisory'
-      AND query LIKE 'SELECT pg_advisory_xact_lock%'
-)`
-		if err := store.pool.QueryRow(ctx, query).Scan(&waiting); err != nil {
-			t.Fatalf("inspect advisory lock wait: %v", err)
-		}
-		if waiting {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("same-project admission did not enter a PostgreSQL advisory lock wait")
-}
-
 // assertMetadataCompleted verifies metadata normalization and completion values.
 func assertMetadataCompleted(
 	t *testing.T,

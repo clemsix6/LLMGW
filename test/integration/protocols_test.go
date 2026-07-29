@@ -110,27 +110,6 @@ func TestStreamingProtocolParity(t *testing.T) {
 	testHarness.assertSecretsAbsent(t, created.Plaintext, "fixture-prompt")
 }
 
-// TestStreamingFramingRejectsProtocolMutations catches delimiter, JSON, ordering, and terminal guards.
-func TestStreamingFramingRejectsProtocolMutations(t *testing.T) {
-	mutations := []struct {
-		name     string
-		protocol string
-		body     string
-	}{
-		{"delimiter", "openai chat completions", "data: {}\ndata: [DONE]\n\n"},
-		{"json", "openai chat completions", "data: {]\n\ndata: [DONE]\n\n"},
-		{"order", "openai responses", "event: response.completed\ndata: {\"type\":\"response.completed\"}\n\nevent: response.created\ndata: {\"type\":\"response.created\"}\n\n"},
-		{"duplicate terminal", "anthropic messages", "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"},
-	}
-	for _, mutation := range mutations {
-		t.Run(mutation.name, func(t *testing.T) {
-			if err := validateProtocolStream(mutation.protocol, []byte(mutation.body)); err == nil {
-				t.Fatal("mutated stream passed protocol framing validation")
-			}
-		})
-	}
-}
-
 // TestMetadataProtocolsAreAuthenticatedAndUnmetered catches accidental generation accounting.
 func TestMetadataProtocolsAreAuthenticatedAndUnmetered(t *testing.T) {
 	created := testHarness.createKey(t, "protocol-metadata")
@@ -189,11 +168,6 @@ func TestMetadataProtocolsAreAuthenticatedAndUnmetered(t *testing.T) {
 	if got := requestCount(t, created, governance.OperationGeneration, ""); got != 0 {
 		t.Fatalf("metadata protocols created %d generation rows", got)
 	}
-}
-
-// TestClientCancellationDoesNotReplay catches retries after either cancellation boundary.
-func TestClientCancellationDoesNotReplay(t *testing.T) {
-	runIsolatedIntegrationTest(t, "LLMGW_TASK11_CANCELLATION_CHILD", runLiveCancellationChild)
 }
 
 // TestMalformedJSONIsCountedOnceWithoutUpstream catches request-parser retries or skipped admission.

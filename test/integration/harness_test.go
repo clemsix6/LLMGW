@@ -33,6 +33,14 @@ const (
 	harnessShutdownTimeout = 35 * time.Second
 )
 
+// Fixture secrets the harness registers so no response may ever echo them back.
+const (
+	upstreamFailureSecret = "upstream-failure-body-secret"
+	upstreamHeaderSecret  = "upstream-response-header-secret"
+	fixtureToolSecret     = "fixture-tool-payload-secret"
+	runtimeAccountSecret  = "runtime-added-account-secret"
+)
+
 // Harness owns the single process-wide embedded SDK integration environment.
 type Harness struct {
 	BaseURL    string                // BaseURL is the embedded proxy URL.

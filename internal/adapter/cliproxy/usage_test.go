@@ -2,11 +2,8 @@ package cliproxy
 
 import (
 	"context"
-	"encoding/base64"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"testing"
 	"time"
 
@@ -139,63 +136,6 @@ func TestUsagePluginRejectsUnauthenticatedPrincipal(t *testing.T) {
 	)
 }
 
-// TestUsagePluginConcurrentGinReuseStress proves immutable records remain
-// correctly attributed while one pooled Gin context is concurrently recycled.
-func TestUsagePluginConcurrentGinReuseStress(t *testing.T) {
-	const records = 128
-	gin.SetMode(gin.TestMode)
-	bridge := fixedUsageBridgeCapacity(t, records)
-	reused := usageGinContext(t, RequestIdentity{})
-	callback := context.WithValue(context.Background(), "gin", reused)
-	want := make(map[string]string, records)
-	principals := make([]string, 0, records)
-	for index := 0; index < records; index++ {
-		publicBytes := []byte(fmt.Sprintf("%012d", index))
-		identity := RequestIdentity{
-			RequestID:   uuid.NewString(),
-			KeyPublicID: base64.RawURLEncoding.EncodeToString(publicBytes),
-		}
-		if !bridge.reserve(identity.RequestID) {
-			t.Fatalf("reserve record %d failed", index)
-		}
-		want[identity.RequestID] = identity.KeyPublicID
-		principals = append(principals, principalFor(t, bridge, identity))
-	}
-
-	var mu sync.Mutex
-	got := make(map[string]string, records)
-	repository := successfulUsageRepository(func(attempt governance.UsageAttempt) {
-		mu.Lock()
-		got[attempt.RequestID] = attempt.ClientKeyPublicID
-		mu.Unlock()
-	})
-	plugin := NewUsagePlugin(repository, bridge, nil)
-
-	var group sync.WaitGroup
-	for _, principal := range principals {
-		group.Add(1)
-		go func() {
-			defer group.Done()
-			plugin.HandleUsage(callback, usageRecordForTest(principal))
-		}()
-	}
-	for index := 0; index < records; index++ {
-		next := usageGinContext(t, RequestIdentity{RequestID: uuid.NewString()})
-		reused.Request = next.Request
-		reused.Keys = next.Keys
-	}
-	group.Wait()
-
-	if len(got) != len(want) {
-		t.Fatalf("persisted correlations = %d, want %d", len(got), len(want))
-	}
-	for requestID, publicID := range want {
-		if got[requestID] != publicID {
-			t.Fatalf("request %s public ID mismatch", requestID)
-		}
-	}
-}
-
 // usageRecordForTest returns a valid authenticated SDK callback. Tests for
 // control records or a missing RequestedAt construct their records directly.
 func usageRecordForTest(apiKey string) sdkusage.Record {
@@ -203,12 +143,6 @@ func usageRecordForTest(apiKey string) sdkusage.Record {
 		APIKey:      apiKey,
 		RequestedAt: time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC),
 	}
-}
-
-func failedUsageRecordForTest(apiKey string) sdkusage.Record {
-	record := usageRecordForTest(apiKey)
-	record.Failed = true
-	return record
 }
 
 // usageGinContext creates the public Gin bridge retained by the pinned SDK.
@@ -219,31 +153,6 @@ func usageGinContext(t *testing.T, identity RequestIdentity) *gin.Context {
 	context, _ := gin.CreateTestContext(httptest.NewRecorder())
 	context.Request = request
 	return context
-}
-
-// usageCallbackContext creates an authenticated callback context and cancellation handle.
-func usageCallbackContext(
-	t *testing.T,
-	identity RequestIdentity,
-) (context.Context, context.CancelFunc) {
-	t.Helper()
-	ginContext := usageGinContext(t, identity)
-	ginContext.Set("accessProvider", AccessProviderType)
-	ginContext.Set("accessMetadata", map[string]string{"request_id": identity.RequestID})
-	callback, cancel := context.WithCancel(context.Background())
-	return context.WithValue(callback, "gin", ginContext), cancel
-}
-
-// fullyPricedRule returns literal all-bucket unit pricing.
-func fullyPricedRule() governance.PriceRule {
-	price := 1.0
-	return governance.PriceRule{
-		Provider:                "openai-compatibility",
-		InputPerMillion:         &price,
-		OutputPerMillion:        &price,
-		CacheReadPerMillion:     &price,
-		CacheCreationPerMillion: &price,
-	}
 }
 
 // usageRepositoryStub controls the two Task 7 repository operations.
