@@ -8,6 +8,7 @@ import (
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
 	sdkapi "github.com/router-for-me/CLIProxyAPI/v7/sdk/api"
 	sdkproxy "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
+	sdkauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 )
 
@@ -42,6 +43,7 @@ func buildSecureSDKWithAfterStart(
 		return nil, nil, err
 	}
 
+	applyCooldownConfig(cfg)
 	clear := RegisterExclusiveAccess(provider)
 	enforceExclusiveAccess(manager, provider)
 	builder.WithConfig(cfg).
@@ -57,6 +59,16 @@ func buildSecureSDKWithAfterStart(
 	}
 	enforceExclusiveAccess(manager, provider)
 	return service, clear, nil
+}
+
+// applyCooldownConfig publishes the cooldown settings the SDK reads from
+// process globals rather than from the config it is built with. Only the
+// upstream CLIProxyAPI binary sets them, so an embedding host that skips this
+// silently runs the legacy one-minute transient cooldown and ignores both
+// disable-cooling and transient-error-cooldown-seconds.
+func applyCooldownConfig(cfg *sdkconfig.Config) {
+	sdkauth.SetQuotaCooldownDisabled(cfg.DisableCooling)
+	sdkauth.SetTransientErrorCooldownSeconds(cfg.TransientErrorCooldownSeconds)
 }
 
 // validateSecureSDKInputs rejects runtime modes that can replace LLMGW access policy.
