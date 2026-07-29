@@ -2,17 +2,14 @@ package cliproxy
 
 import (
 	"context"
-
-	"github.com/clemsix6/LLMGW/internal/domain/governance"
 )
 
 // RequestIdentity is the immutable project identity attached to an admitted request.
 type RequestIdentity struct {
-	RequestID   string               // RequestID is the governed request UUID.
-	ProjectID   int64                // ProjectID identifies the authenticated project.
-	ClientKeyID int64                // ClientKeyID identifies the authenticating key.
-	KeyPublicID string               // KeyPublicID is the key's non-secret public identifier.
-	Operation   governance.Operation // Operation identifies generation or metadata work.
+	RequestID   string // RequestID is the governed request UUID.
+	ProjectID   int64  // ProjectID identifies the authenticated project.
+	ClientKeyID int64  // ClientKeyID identifies the authenticating key.
+	KeyPublicID string // KeyPublicID is the key's non-secret public identifier.
 }
 
 // identityContextKey is private so only this package can attach request identities.

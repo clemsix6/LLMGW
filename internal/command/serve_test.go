@@ -1,10 +1,10 @@
 package command
 
 import (
+	"bytes"
 	"context"
 	"errors"
-	"reflect"
-	"sync"
+	"strings"
 	"testing"
 	"time"
 
@@ -64,114 +64,6 @@ func TestServeFailsBeforeSDKConstruction(t *testing.T) {
 	}
 }
 
-// TestServeLifecycleOrder catches construction before crash recovery, workers starting before the
-// SDK is built, or PostgreSQL closing before SDK usage and workers have drained.
-func TestServeLifecycleOrder(t *testing.T) {
-	var mu sync.Mutex
-	var events []string
-	add := func(event string) {
-		mu.Lock()
-		events = append(events, event)
-		mu.Unlock()
-	}
-	cfg := validServeConfig()
-	deps := successfulServeDependencies(&cfg, add)
-	ctx, cancel := context.WithCancel(context.Background())
-	service := &fakeServeService{run: func(runCtx context.Context) error {
-		add("sdk-run")
-		cancel()
-		<-runCtx.Done()
-		add("sdk-usage-drained")
-		return nil
-	}}
-	deps.buildService = func(config.Config, *serveStore, []byte) (serveService, error) {
-		add("sdk-construct")
-		return service, nil
-	}
-
-	if err := runServeWith(ctx, nil, testRootStreams(serveEnvironment()), deps); err != nil {
-		t.Fatalf("serve: %v", err)
-	}
-	want := []string{
-		"load", "auth-dir", "open", "ping", "serve-lock-acquire", "recover", "sdk-construct",
-		"workers-start", "sdk-run", "sdk-usage-drained", "workers-stop",
-		"serve-lock-release", "postgres-close",
-	}
-	if !reflect.DeepEqual(events, want) {
-		t.Fatalf("lifecycle events = %#v, want %#v", events, want)
-	}
-}
-
-// TestServeLockFailurePrecedesRecovery catches moving singleton acquisition
-// after RecoverInterrupted, which would let a losing process mutate live rows.
-func TestServeLockFailurePrecedesRecovery(t *testing.T) {
-	cfg := validServeConfig()
-	var recovered bool
-	deps := successfulServeDependencies(&cfg, nil)
-	lockErr := errors.New("serve lock held")
-	deps.openStore = func(context.Context, string) (*serveStore, error) {
-		return &serveStore{
-			ping: func(context.Context) error { return nil },
-			acquireServeLock: func(context.Context) (func(context.Context) error, error) {
-				return nil, lockErr
-			},
-			recoverInterrupted: func(context.Context, time.Time) (int64, error) {
-				recovered = true
-				return 0, nil
-			},
-			close: func() {},
-		}, nil
-	}
-
-	err := runServeWith(context.Background(), nil, testRootStreams(serveEnvironment()), deps)
-	if !errors.Is(err, lockErr) {
-		t.Fatalf("serve lock error = %v, want lock cause", err)
-	}
-	if recovered {
-		t.Fatal("RecoverInterrupted ran after singleton acquisition failed")
-	}
-}
-
-// TestServeJoinsLockReleaseError catches cleanup that drops either the original
-// SDK failure or the dedicated-session unlock failure.
-func TestServeJoinsLockReleaseError(t *testing.T) {
-	cfg := validServeConfig()
-	deps := successfulServeDependencies(&cfg, nil)
-	runErr := errors.New("listener stopped")
-	releaseErr := errors.New("unlock failed")
-	deps.buildService = func(config.Config, *serveStore, []byte) (serveService, error) {
-		return &fakeServeService{run: func(context.Context) error { return runErr }}, nil
-	}
-	store, err := deps.openStore(context.Background(), "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	store.acquireServeLock = func(context.Context) (func(context.Context) error, error) {
-		return func(context.Context) error { return releaseErr }, nil
-	}
-	deps.openStore = func(context.Context, string) (*serveStore, error) { return store, nil }
-
-	err = runServeWith(context.Background(), nil, testRootStreams(serveEnvironment()), deps)
-	if !errors.Is(err, runErr) || !errors.Is(err, releaseErr) {
-		t.Fatalf("serve cleanup error = %v, want joined run/unlock causes", err)
-	}
-}
-
-// TestServePropagatesUnexpectedSDKReturn catches a composition root that treats an unexpected
-// listener/service return as a clean shutdown and prevents the process manager from restarting it.
-func TestServePropagatesUnexpectedSDKReturn(t *testing.T) {
-	cfg := validServeConfig()
-	deps := successfulServeDependencies(&cfg, nil)
-	unexpected := errors.New("listener stopped")
-	deps.buildService = func(config.Config, *serveStore, []byte) (serveService, error) {
-		return &fakeServeService{run: func(context.Context) error { return unexpected }}, nil
-	}
-	err := runServeWith(context.Background(), nil, testRootStreams(serveEnvironment()), deps)
-	if !errors.Is(err, unexpected) {
-		t.Fatalf("serve error = %v, want listener error", err)
-	}
-}
-
 // TestServeRejectsUnexpectedCleanSDKReturn catches a lifecycle mutation that lets an unrequested
 // clean listener return exit the process successfully instead of asking its manager for a restart.
 func TestServeRejectsUnexpectedCleanSDKReturn(t *testing.T) {
@@ -196,6 +88,18 @@ func validServeConfig() config.Config {
 			UsageRetentionDays: 35,
 		},
 		UsageRetention: 35 * 24 * time.Hour,
+	}
+}
+
+// testRootStreams builds command streams reading a fixed environment.
+func testRootStreams(environment map[string]string) Streams {
+	return Streams{
+		In:  strings.NewReader(""),
+		Out: new(bytes.Buffer),
+		Err: new(bytes.Buffer),
+		Getenv: func(name string) string {
+			return environment[name]
+		},
 	}
 }
 

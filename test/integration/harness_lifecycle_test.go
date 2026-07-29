@@ -1,10 +1,21 @@
 package integration
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"time"
 )
+
+// safeBodySummary bounds a response body and redacts the fixture prompt before logging.
+func safeBodySummary(body []byte) string {
+	const maximum = 160
+	body = bytes.ReplaceAll(body, []byte("fixture-prompt"), []byte("[redacted]"))
+	if len(body) > maximum {
+		body = body[:maximum]
+	}
+	return string(body)
+}
 
 // stopService cancels and waits for the single embedded SDK lifecycle.
 func (h *Harness) stopService() error {

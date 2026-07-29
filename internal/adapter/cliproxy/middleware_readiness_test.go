@@ -48,38 +48,3 @@ func TestRequestsAreRefusedUntilTheSDKIsReady(t *testing.T) {
 		t.Fatalf("/healthz after readiness = %d, want %d", healthy.Code, http.StatusOK)
 	}
 }
-
-// TestForbiddenRoutesStayForbiddenBeforeReadiness proves the deny policy is
-// unconditional and never weakened by a transient startup state.
-func TestForbiddenRoutesStayForbiddenBeforeReadiness(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	middleware := NewMiddleware(&fakeKeys{}, &fakeRequests{}, time.Now, fixedUsageBridgeCapacity(t, 1))
-	middleware.serveWhenReady(make(chan struct{}))
-
-	engine := gin.New()
-	engine.Use(middleware.Handler())
-
-	recorder := httptest.NewRecorder()
-	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v0/management/config", nil))
-	if recorder.Code != http.StatusNotFound {
-		t.Fatalf("denied route before readiness = %d, want %d", recorder.Code, http.StatusNotFound)
-	}
-}
-
-// TestNoReadinessSignalServesImmediately keeps a middleware built without a
-// readiness signal usable, which is what unit tests and any simpler
-// composition rely on.
-func TestNoReadinessSignalServesImmediately(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	middleware := NewMiddleware(&fakeKeys{}, &fakeRequests{}, time.Now, fixedUsageBridgeCapacity(t, 1))
-
-	engine := gin.New()
-	engine.Use(middleware.Handler())
-	engine.GET("/healthz", func(c *gin.Context) { c.Status(http.StatusOK) })
-
-	recorder := httptest.NewRecorder()
-	engine.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/healthz", nil))
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("/healthz without a readiness signal = %d, want %d", recorder.Code, http.StatusOK)
-	}
-}

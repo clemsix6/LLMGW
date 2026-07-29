@@ -33,16 +33,23 @@ const (
 	harnessShutdownTimeout = 35 * time.Second
 )
 
+// Fixture secrets the harness registers so no response may ever echo them back.
+const (
+	upstreamFailureSecret = "upstream-failure-body-secret"
+	upstreamHeaderSecret  = "upstream-response-header-secret"
+	fixtureToolSecret     = "fixture-tool-payload-secret"
+	runtimeAccountSecret  = "runtime-added-account-secret"
+)
+
 // Harness owns the single process-wide embedded SDK integration environment.
 type Harness struct {
-	BaseURL    string                // BaseURL is the embedded proxy URL.
-	ConfigPath string                // ConfigPath is the shared YAML path.
-	AuthDir    string                // AuthDir is the startup-only SDK auth directory.
-	Store      *postgres.Store       // Store persists governance state.
-	UsageRepo  *gatedUsageRepository // UsageRepo can pause plugin persistence deterministically.
-	Keys       *projectkey.Service   // Keys creates and authenticates project keys.
-	Upstream   *StubUpstream         // Upstream is the deterministic provider.
-	Usage      *usageCapture         // Usage observes SDK principal propagation.
+	BaseURL    string              // BaseURL is the embedded proxy URL.
+	ConfigPath string              // ConfigPath is the shared YAML path.
+	AuthDir    string              // AuthDir is the startup-only SDK auth directory.
+	Store      *postgres.Store     // Store persists governance state.
+	Keys       *projectkey.Service // Keys creates and authenticates project keys.
+	Upstream   *StubUpstream       // Upstream is the deterministic provider.
+	Usage      *usageCapture       // Usage observes SDK principal propagation.
 
 	cancel context.CancelFunc // cancel stops the single SDK service.
 	done   <-chan error       // done reports the SDK Run result.
@@ -199,7 +206,6 @@ GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO llmgw_service`
 	if err != nil {
 		return fmt.Errorf("open non-owner integration governance store:\n%w", err)
 	}
-	h.UsageRepo = newGatedUsageRepository(h.Store)
 	h.registerSecrets("task11-service-role-password")
 	return nil
 }
@@ -227,7 +233,7 @@ func (h *Harness) startService(ctx context.Context) error {
 		return fmt.Errorf("construct integration usage bridge:\n%w", err)
 	}
 	middleware := cliproxy.NewMiddleware(h.Keys, h.Store, time.Now, usageBridge)
-	usagePlugin := cliproxy.NewUsagePlugin(h.UsageRepo, usageBridge, postgres.IsTransientUsageError)
+	usagePlugin := cliproxy.NewUsagePlugin(h.Store, usageBridge, postgres.IsTransientUsageError)
 	service, err := cliproxy.NewService(cfg, middleware, usagePlugin, h.Usage)
 	if err != nil {
 		return fmt.Errorf("construct integration proxy:\n%w", err)
@@ -367,21 +373,6 @@ WHERE project_id = $1
 	var count int64
 	if err := h.db.QueryRow(context.Background(), query, projectID, operation, path).Scan(&count); err != nil {
 		t.Fatal("count integration requests failed")
-	}
-	return count
-}
-
-// countCompletedRequests returns completed request rows for one project.
-func (h *Harness) countCompletedRequests(t *testing.T, projectID int64) int64 {
-	t.Helper()
-	const query = `
-SELECT count(*)
-FROM request_event
-WHERE project_id = $1
-  AND state = 'completed'`
-	var count int64
-	if err := h.db.QueryRow(context.Background(), query, projectID).Scan(&count); err != nil {
-		t.Fatal("count completed integration requests failed")
 	}
 	return count
 }

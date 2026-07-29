@@ -34,18 +34,6 @@ type LegacyImport struct {
 	Status   string
 }
 
-type legacyStageStore interface {
-	Save(context.Context, *coreauth.Auth) (string, error)
-}
-
-type legacyImportHooks struct {
-	newStageStore   func(string) (legacyStageStore, error)
-	install         func(string, string) error
-	verifyInstalled func(string) error
-	removeInstalled func(string, string) error
-	removeStage     func(string) error
-}
-
 // authManager is the public SDK manager boundary. It keeps OAuth/browser tests at the supported
 // SDK surface rather than duplicating provider flows or reaching into upstream internals.
 type authManager interface {
@@ -153,15 +141,10 @@ func Login(ctx context.Context, cfg *sdkconfig.Config, provider string, options 
 }
 
 // ImportLegacy exports only legacy formats that the public CLIProxyAPI file store understands.
-func ImportLegacy(ctx context.Context, authDir string, credentials []governance.LegacyCredential) ([]LegacyImport, error) {
-	return importLegacyWithHooks(ctx, authDir, credentials, legacyImportHooks{})
-}
-
-func importLegacyWithHooks(
+func ImportLegacy(
 	ctx context.Context,
 	authDir string,
 	credentials []governance.LegacyCredential,
-	hooks legacyImportHooks,
 ) ([]LegacyImport, error) {
 	if err := PrepareAuthDir(authDir); err != nil {
 		return nil, err
@@ -171,23 +154,6 @@ func importLegacyWithHooks(
 		return nil, errors.New("import legacy auth: resolve directory failed")
 	}
 	authDir = filepath.Clean(absoluteAuthDir)
-	if hooks.newStageStore == nil {
-		hooks.newStageStore = func(dir string) (legacyStageStore, error) {
-			return newSecureFileTokenStore(dir)
-		}
-	}
-	if hooks.install == nil {
-		hooks.install = os.Link
-	}
-	if hooks.verifyInstalled == nil {
-		hooks.verifyInstalled = secureSavedAuthFile
-	}
-	if hooks.removeInstalled == nil {
-		hooks.removeInstalled = removeInstalledLegacyAuth
-	}
-	if hooks.removeStage == nil {
-		hooks.removeStage = os.RemoveAll
-	}
 	results := make([]LegacyImport, 0, len(credentials))
 	for _, legacy := range credentials {
 		if err := ctx.Err(); err != nil {
@@ -216,7 +182,7 @@ func importLegacyWithHooks(
 			return nil, errors.New("import legacy auth: inspect destination failed")
 		}
 		auth := &coreauth.Auth{ID: fileName, Provider: provider, FileName: fileName, Metadata: metadata}
-		installed, err := stageAndInstallLegacyAuth(ctx, authDir, path, auth, hooks)
+		installed, err := stageAndInstallLegacyAuth(ctx, authDir, path, auth)
 		if err != nil {
 			return nil, err
 		}
@@ -236,14 +202,13 @@ func stageAndInstallLegacyAuth(
 	authDir string,
 	finalPath string,
 	auth *coreauth.Auth,
-	hooks legacyImportHooks,
 ) (installed bool, returnErr error) {
 	stageDir, err := os.MkdirTemp(authDir, ".llmgw-import-")
 	if err != nil {
 		return false, errors.New("import legacy auth: create stage failed")
 	}
 	defer func() {
-		if cleanupErr := cleanupLegacyStage(stageDir, hooks.removeStage); cleanupErr != nil {
+		if cleanupErr := cleanupLegacyStage(stageDir, os.RemoveAll); cleanupErr != nil {
 			if installed && returnErr == nil {
 				returnErr = errors.New("import legacy auth: final installed; stage cleanup failed; manual cleanup required")
 				return
@@ -255,7 +220,7 @@ func stageAndInstallLegacyAuth(
 		return false, errors.New("import legacy auth: secure stage failed")
 	}
 
-	store, err := hooks.newStageStore(stageDir)
+	store, err := newSecureFileTokenStore(stageDir)
 	if err != nil {
 		return false, errors.New("import legacy auth: create stage store failed")
 	}
@@ -271,15 +236,15 @@ func stageAndInstallLegacyAuth(
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
-	if err := hooks.install(expectedStagePath, finalPath); err != nil {
+	if err := os.Link(expectedStagePath, finalPath); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return false, nil
 		}
 		return false, errors.New("import legacy auth: atomic install failed")
 	}
-	if err := hooks.verifyInstalled(finalPath); err != nil {
+	if err := secureSavedAuthFile(finalPath); err != nil {
 		verifyErr := errors.New("import legacy auth: installed file verification failed")
-		if removalErr := removeLegacyInstalledFile(expectedStagePath, finalPath, hooks.removeInstalled); removalErr != nil {
+		if removalErr := removeLegacyInstalledFile(expectedStagePath, finalPath, removeInstalledLegacyAuth); removalErr != nil {
 			return false, errors.Join(verifyErr, removalErr)
 		}
 		return false, verifyErr

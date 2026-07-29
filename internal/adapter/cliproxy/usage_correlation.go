@@ -372,10 +372,6 @@ func (b *UsageBridge) cancelRequestID(token string) (string, bool) {
 	return requestID.String(), true
 }
 
-func (b *UsageBridge) barrier(requestID string) (string, bool) {
-	return b.barrierFor(requestID, false)
-}
-
 func (b *UsageBridge) barrierFor(requestID string, canceled bool) (string, bool) {
 	if b == nil {
 		return "", false

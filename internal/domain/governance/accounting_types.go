@@ -39,8 +39,6 @@ const (
 	AccountingObserved AccountingState = "observed"
 	// AccountingUnknown identifies a request whose usage could not be determined.
 	AccountingUnknown AccountingState = "accounting_unknown"
-	// AccountingResolvedZero identifies unknown accounting resolved as zero usage.
-	AccountingResolvedZero AccountingState = "resolved_zero"
 	// AccountingNotApplicable identifies a request that does not require usage accounting.
 	AccountingNotApplicable AccountingState = "not_applicable"
 )

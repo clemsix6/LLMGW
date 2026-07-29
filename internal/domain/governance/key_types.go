@@ -57,7 +57,6 @@ type LegacyCredential struct {
 	AccountLabel     string     // AccountLabel is the operator-facing account name.
 	AccessToken      string     // AccessToken is the current provider access token.
 	RefreshToken     string     // RefreshToken is the durable provider refresh token.
-	SessionKey       string     // SessionKey is the durable Claude session credential.
 	ChatGPTAccountID string     // ChatGPTAccountID is the provider account identifier.
 	ExpiresAt        *time.Time // ExpiresAt is the optional UTC access-token expiry.
 }
