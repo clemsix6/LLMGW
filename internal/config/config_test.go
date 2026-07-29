@@ -1,30 +1,486 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
 
-// TestLoadParsesCodexAccounts verifies that LLMGW_CODEX_ACCOUNTS is parsed into
-// the CodexAccounts slice with all three fields populated correctly.
-func TestLoadParsesCodexAccounts(t *testing.T) {
-	t.Setenv("LLMGW_CODEX_ACCOUNTS", "main:rt_abc:acct_123")
-	t.Setenv("LLMGW_POSTGRES_DSN", "postgres://x")
-
-	cfg, err := Load()
+// TestLoadSharedConfig verifies that one YAML document configures CLIProxyAPI and LLMGW.
+func TestLoadSharedConfig(t *testing.T) {
+	path := writeConfig(t, `
+host: 127.0.0.1
+port: 8088
+auth-dir: /tmp/auth
+disable-image-generation: true
+request-retry: 1
+max-retry-credentials: 2
+routing:
+  strategy: round-robin
+  session-affinity: false
+remote-management:
+  allow-remote: false
+  secret-key: ""
+  disable-control-panel: true
+llmgw:
+  postgres-dsn-env: TEST_DSN
+  key-pepper-env: TEST_PEPPER
+  usage-retention-days: 35
+`)
+	cfg, err := Load(path, mapEnv(map[string]string{
+		"TEST_DSN":    "postgres://example",
+		"TEST_PEPPER": strings.Repeat("p", 32),
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cfg.CodexAccounts) != 1 || cfg.CodexAccounts[0].AccountID != "acct_123" {
-		t.Fatalf("CodexAccounts = %+v", cfg.CodexAccounts)
+	if cfg.Proxy.Host != "127.0.0.1" || cfg.Proxy.Port != 8088 {
+		t.Fatalf("proxy address = %s:%d", cfg.Proxy.Host, cfg.Proxy.Port)
+	}
+	if cfg.UsageRetention != 35*24*time.Hour {
+		t.Fatalf("retention = %s", cfg.UsageRetention)
+	}
+	if cfg.LLMGW.UsageOutstandingCapacity != 64 {
+		t.Fatalf("usage outstanding capacity = %d, want 64", cfg.LLMGW.UsageOutstandingCapacity)
+	}
+	if cfg.MaxUsageRecords != 8 {
+		t.Fatalf("max usage records = %d, want 8", cfg.MaxUsageRecords)
+	}
+	if got, err := cfg.DatabaseDSN(mapEnv(map[string]string{"TEST_DSN": "postgres://example"})); err != nil || got != "postgres://example" {
+		t.Fatalf("database DSN = %q, %v", got, err)
+	}
+	if got, err := cfg.KeyPepper(mapEnv(map[string]string{"TEST_PEPPER": strings.Repeat("p", 32)})); err != nil || len(got) != 32 {
+		t.Fatalf("key pepper length = %d, %v", len(got), err)
 	}
 }
 
-// TestParseCodexTripletRejectsFourFields verifies that a four-colon-separated entry is rejected,
-// so a token or account_id containing a colon does not silently fold into the wrong field.
-func TestParseCodexTripletRejectsFourFields(t *testing.T) {
-	t.Setenv("LLMGW_CODEX_ACCOUNTS", "main:rt_abc:acct_123:extra")
-	t.Setenv("LLMGW_POSTGRES_DSN", "postgres://x")
+func TestUsageBackpressureConfiguration(t *testing.T) {
+	tests := []struct {
+		name      string
+		rewrite   func(string) string
+		wantError string
+		wantBound int
+		wantCap   int
+	}{
+		{
+			name:      "defaults",
+			rewrite:   func(value string) string { return value },
+			wantBound: 8,
+			wantCap:   64,
+		},
+		{
+			name: "explicit minimum capacity",
+			rewrite: func(value string) string {
+				return value + "llmgw:\n  usage-outstanding-capacity: 1\n"
+			},
+			wantBound: 8,
+			wantCap:   1,
+		},
+		{
+			name: "explicit maximum capacity",
+			rewrite: func(value string) string {
+				return value + "llmgw:\n  usage-outstanding-capacity: 1024\n"
+			},
+			wantBound: 8,
+			wantCap:   1024,
+		},
+		{
+			name: "negative request retry",
+			rewrite: func(value string) string {
+				return strings.Replace(value, "request-retry: 1", "request-retry: -1", 1)
+			},
+			wantError: "request-retry must be nonnegative",
+		},
+		{
+			name: "unbounded credential retries",
+			rewrite: func(value string) string {
+				return strings.Replace(value, "max-retry-credentials: 2", "max-retry-credentials: 0", 1)
+			},
+			wantError: "max-retry-credentials must be positive",
+		},
+		{
+			name: "session affinity",
+			rewrite: func(value string) string {
+				return strings.Replace(value, "session-affinity: false", "session-affinity: true", 1)
+			},
+			wantError: "routing.session-affinity must be false",
+		},
+		{
+			name: "antigravity credits fallback",
+			rewrite: func(value string) string {
+				return value + "quota-exceeded:\n  antigravity-credits: true\n"
+			},
+			wantError: "quota-exceeded.antigravity-credits must be false",
+		},
+		{
+			name: "capacity below range",
+			rewrite: func(value string) string {
+				return value + "llmgw:\n  usage-outstanding-capacity: -1\n"
+			},
+			wantError: "usage-outstanding-capacity must be between 1 and 1024",
+		},
+		{
+			name: "capacity above range",
+			rewrite: func(value string) string {
+				return value + "llmgw:\n  usage-outstanding-capacity: 1025\n"
+			},
+			wantError: "usage-outstanding-capacity must be between 1 and 1024",
+		},
+		{
+			name: "record bound ceiling",
+			rewrite: func(value string) string {
+				return strings.Replace(value, "request-retry: 1", "request-retry: 64", 1)
+			},
+			wantError: "maximum SDK usage records per request 260 exceeds 256",
+		},
+		{
+			name: "record bound overflow",
+			rewrite: func(value string) string {
+				return strings.Replace(value, "request-retry: 1", "request-retry: 9223372036854775807", 1)
+			},
+			wantError: "maximum SDK usage records per request overflows",
+		},
+	}
 
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected error for four-field codex triplet, got nil")
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := writeConfig(t, test.rewrite(secureConfig))
+			cfg, err := Load(path, mapEnv(nil))
+			if test.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("Load() error = %v, want containing %q", err, test.wantError)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.MaxUsageRecords != test.wantBound ||
+				cfg.LLMGW.UsageOutstandingCapacity != test.wantCap {
+				t.Fatalf("backpressure config = (bound=%d capacity=%d), want (%d, %d)",
+					cfg.MaxUsageRecords,
+					cfg.LLMGW.UsageOutstandingCapacity,
+					test.wantBound,
+					test.wantCap,
+				)
+			}
+		})
+	}
+}
+
+func TestUsageBackpressureRequiresImageGenerationFullyDisabled(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "missing", value: ""},
+		{name: "false boolean", value: "disable-image-generation: false\n"},
+		{name: "false string", value: "disable-image-generation: \"false\"\n"},
+		{name: "zero", value: "disable-image-generation: 0\n"},
+		{name: "zero string", value: "disable-image-generation: \"0\"\n"},
+		{name: "chat", value: "disable-image-generation: chat\n"},
+		{name: "chat string", value: "disable-image-generation: \"chat\"\n"},
+		{name: "passthrough", value: "disable-image-generation: passthrough\n"},
+		{name: "passthrough string", value: "disable-image-generation: \"passthrough\"\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			value := strings.Replace(
+				secureConfig,
+				"disable-image-generation: true\n",
+				test.value,
+				1,
+			)
+			_, err := Load(writeConfig(t, value), mapEnv(nil))
+			if err == nil || !strings.Contains(err.Error(), "disable-image-generation must be true") {
+				t.Fatalf("Load() error = %v, want image-generation rejection", err)
+			}
+		})
+	}
+}
+
+func TestValidateUsageBackpressureRejectsProgrammaticImageGeneration(t *testing.T) {
+	cfg, err := Load(writeConfig(t, secureConfig), mapEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Proxy.DisableImageGeneration.String() != "true" {
+		t.Fatalf("loaded image generation mode = %q, want true",
+			cfg.Proxy.DisableImageGeneration.String())
+	}
+	cfg.Proxy.DisableImageGeneration = 0
+
+	err = cfg.ValidateUsageBackpressure()
+	if err == nil || !strings.Contains(err.Error(), "disable-image-generation must be true") {
+		t.Fatalf("ValidateUsageBackpressure() error = %v, want image-generation rejection", err)
+	}
+}
+
+func TestUsageBackpressureRejectsPayloadRulesThatCanRestoreImageGeneration(t *testing.T) {
+	path := writeConfig(t, secureConfig+`
+payload:
+  override-raw:
+    - models:
+        - name: gpt-*
+          protocol: openai-response
+      params:
+        tools: '[{"type":"image_generation"}]'
+`)
+
+	_, err := Load(path, mapEnv(nil))
+
+	if err == nil || !strings.Contains(err.Error(), "payload write rules must be empty") {
+		t.Fatalf("Load() error = %v, want payload write-rule rejection", err)
+	}
+}
+
+func TestUsageRecordBoundCountsEffectiveOpenAICompatModelPool(t *testing.T) {
+	path := writeConfig(t, secureConfig+`
+openai-compatibility:
+  - name: pool
+    base-url: http://127.0.0.1:12345/v1
+    api-key-entries:
+      - api-key: account-a
+    models:
+      - name: upstream-a
+        alias: shared
+      - name: upstream-b
+        alias: SHARED
+      - name: upstream-b
+        alias: shared
+      - name: upstream-c
+        alias: shared
+`)
+	cfg, err := Load(path, mapEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 2 rounds * 2 credentials * (3 models + one 401 replay).
+	if cfg.MaxUsageRecords != 16 {
+		t.Fatalf("max usage records = %d, want 16", cfg.MaxUsageRecords)
+	}
+}
+
+func TestLoadDefersAuthRetryInspectionUntilPrivateSnapshot(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+	}{
+		{
+			name: "above shared retry",
+			body: `{"provider":"codex","metadata":{"request_retry":200}}`,
+		},
+		{
+			name: "invalid value",
+			body: `{"provider":"codex","metadata":{"request_retry":"many"}}`,
+		},
+		{
+			name: "hidden second override",
+			body: `{"request_retry":0,"metadata":{"request-retry":200}}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			authDir := t.TempDir()
+			if err := os.WriteFile(
+				filepath.Join(authDir, "hostile.json"),
+				[]byte(test.body),
+				0o600,
+			); err != nil {
+				t.Fatal(err)
+			}
+			value := strings.Replace(secureConfig, "/tmp/auth", authDir, 1)
+			path := writeConfig(t, value)
+
+			if _, err := Load(path, mapEnv(nil)); err != nil {
+				t.Fatalf("Load inspected unsnapshotted auth file: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateUsageBackpressureRejectsDirectSessionAffinity(t *testing.T) {
+	path := writeConfig(t, secureConfig)
+	cfg, err := Load(path, mapEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Proxy.Routing.SessionAffinity = true
+
+	err = cfg.ValidateUsageBackpressure()
+	if err == nil || !strings.Contains(err.Error(), "routing.session-affinity must be false") {
+		t.Fatalf("ValidateUsageBackpressure() error = %v, want session-affinity rejection", err)
+	}
+}
+
+func TestLoadDoesNotScanTildeAuthDirectory(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	authDir := filepath.Join(home, "auth")
+	if err := os.Mkdir(authDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(authDir, "hostile.json"),
+		[]byte(`{"provider":"codex","metadata":{"request_retry":200}}`),
+		0o600,
+	); err != nil {
+		t.Fatal(err)
+	}
+	value := strings.Replace(secureConfig, "/tmp/auth", "~/auth", 1)
+	path := writeConfig(t, value)
+
+	if _, err := Load(path, mapEnv(nil)); err != nil {
+		t.Fatalf("Load inspected unsnapshotted tilde auth file: %v", err)
+	}
+}
+
+// TestLoadAllowsLLMGWBlock verifies that the SDK loader accepts the LLMGW-owned block.
+func TestLoadAllowsLLMGWBlock(t *testing.T) {
+	path := writeConfig(t, secureConfig+`
+llmgw:
+  usage-retention-days: 40
+  future-governance-setting: preserved-for-later
+`)
+
+	cfg, err := Load(path, mapEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.UsageRetention != 40*24*time.Hour {
+		t.Fatalf("retention = %s", cfg.UsageRetention)
+	}
+}
+
+// TestSecurityRejectsUnsafeConfiguration verifies unsafe inbound options are rejected before the SDK can rewrite the file.
+func TestSecurityRejectsUnsafeConfiguration(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		env  map[string]string
+	}{
+		{
+			name: "api keys",
+			yaml: secureConfig + "api-keys:\n  - forbidden\n",
+		},
+		{
+			name: "remote management listener",
+			yaml: strings.Replace(secureConfig, "allow-remote: false", "allow-remote: true", 1),
+		},
+		{
+			name: "remote management plaintext secret",
+			yaml: strings.Replace(secureConfig, "secret-key: \"\"", "secret-key: plaintext", 1),
+		},
+		{
+			name: "remote management whitespace secret",
+			yaml: strings.Replace(secureConfig, "secret-key: \"\"", "secret-key: \" \"", 1),
+		},
+		{
+			name: "control panel enabled",
+			yaml: strings.Replace(secureConfig, "disable-control-panel: true", "disable-control-panel: false", 1),
+		},
+		{
+			name: "home enabled",
+			yaml: secureConfig + "home:\n  enabled: true\n",
+		},
+		{
+			name: "pprof enabled",
+			yaml: secureConfig + "pprof:\n  enable: true\n",
+		},
+		{
+			name: "management password environment",
+			yaml: secureConfig,
+			env:  map[string]string{"MANAGEMENT_PASSWORD": "forbidden"},
+		},
+		{
+			name: "empty auth directory",
+			yaml: strings.Replace(secureConfig, "auth-dir: /tmp/auth", "auth-dir: \"\"", 1),
+		},
+		{
+			name: "too short usage retention",
+			yaml: secureConfig + "llmgw:\n  usage-retention-days: 1\n",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := writeConfig(t, test.yaml)
+			before, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			_, err = Load(path, mapEnv(test.env))
+			if err == nil {
+				t.Fatal("Load() error = nil")
+			}
+
+			after, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != string(before) {
+				t.Fatalf("configuration file changed:\nwant %q\n got %q", before, after)
+			}
+		})
+	}
+}
+
+// TestSecretsRejectMissingAndShortValues verifies database and pepper secrets are resolved only when needed.
+func TestSecretsRejectMissingAndShortValues(t *testing.T) {
+	path := writeConfig(t, secureConfig+`
+llmgw:
+  postgres-dsn-env: TEST_DSN
+  key-pepper-env: TEST_PEPPER
+`)
+	cfg, err := Load(path, mapEnv(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := cfg.DatabaseDSN(mapEnv(nil)); err == nil {
+		t.Fatal("DatabaseDSN() error = nil")
+	}
+	if _, err := cfg.KeyPepper(mapEnv(nil)); err == nil {
+		t.Fatal("KeyPepper() missing error = nil")
+	}
+	if _, err := cfg.KeyPepper(mapEnv(map[string]string{"TEST_PEPPER": strings.Repeat("p", 31)})); err == nil {
+		t.Fatal("KeyPepper() short value error = nil")
+	}
+}
+
+// secureConfig is the minimum accepted shared configuration.
+const secureConfig = `
+host: 127.0.0.1
+port: 8088
+auth-dir: /tmp/auth
+disable-image-generation: true
+request-retry: 1
+max-retry-credentials: 2
+routing:
+  strategy: round-robin
+  session-affinity: false
+remote-management:
+  allow-remote: false
+  secret-key: ""
+  disable-control-panel: true
+`
+
+// writeConfig writes a configuration fixture and returns its path.
+func writeConfig(t *testing.T, contents string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// mapEnv adapts a map to getenv's function shape.
+func mapEnv(values map[string]string) func(string) string {
+	return func(name string) string {
+		return values[name]
 	}
 }

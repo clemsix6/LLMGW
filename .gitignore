@@ -8,7 +8,8 @@
 *.local
 
 # Go
-vendor/
+!vendor/
+!vendor/**
 
 # Isolated implementation worktrees
 /.worktrees/

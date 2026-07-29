@@ -1,14 +1,8 @@
 name: CI
 
-# One job:
-#   - check: build, vet, gofmt, unit tests. Hermetic (Postgres via testcontainers, no live provider).
-#     Runs on every push to main and every pull request.
-#
-# The real-Anthropic E2E job was removed on 2026-07-17: Anthropic now rejects the session-key OAuth
-# bootstrap (the authorize step) with 403 session_stale_relogin, so the suite can no longer mint
-# tokens in CI and reddened main for an infra reason unrelated to the code under test. The E2E tests
-# themselves still live in test/e2e/ and run locally once a valid credential is seeded. The Codex E2E
-# lives in e2e-codex.yml (manual-only).
+# The job is hermetic: it exercises the governed embedded SDK with local
+# testcontainers and fixture upstreams. It intentionally has no live provider
+# credentials; operator-owned live verification is gated by LLMGW_LIVE_CONFIG.
 
 on:
   push:
@@ -46,5 +40,8 @@ jobs:
       - name: build
         run: go build ./...
 
-      - name: unit tests
+      - name: Domain and adapter tests
         run: go test -race ./internal/... -count=1
+
+      - name: Embedded CLIProxy integration
+        run: go test ./test/integration -count=1 -v
