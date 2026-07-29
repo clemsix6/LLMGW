@@ -142,7 +142,10 @@ The CLIProxyAPI dependency is pinned to `v7.2.102` initially
 (`8423cce2d1004e80948a9e2c60ee69354c0aabc3`). Upgrades are explicit changes and
 must pass the complete LLMGW integration suite. All SDK imports remain inside a
 focused CLIProxy adapter package so upstream API churn does not leak into the
-budget and project domains.
+budget and project domains. The dependency graph is vendored because LLMGW
+applies one narrow audited usage-order patch to this exact pin: auxiliary-model
+records carry an explicit marker and are emitted before the primary terminal
+record. `go.mod` remains pinned to the upstream tag and contains no replacement.
 
 ## 6. Public API and Compatibility
 
@@ -161,7 +164,13 @@ including the following protocol families:
 - Gemini-compatible routes;
 - model discovery;
 - streaming and non-streaming variants;
-- compatible image, video, realtime, and direct Codex routes exposed by the SDK.
+- compatible video, realtime, and direct Codex routes exposed by the SDK.
+
+Image generation is intentionally unsupported for the v7.2.102 pin. LLMGW
+requires `disable-image-generation: true`; the native image endpoints return
+404 and image tools are stripped. The vendored usage patch still accounts for
+an unsolicited upstream `tool_usage.image_gen` response fail-closed; disabling
+the request feature is defense in depth, not the accounting proof.
 
 The wrapper does not maintain a duplicate inference route table. Compatibility
 follows the pinned SDK, with LLMGW integration tests guarding the routes its
@@ -386,6 +395,81 @@ from request cancellation, and performs the PostgreSQL write synchronously
 inside the callback with a short deadline and bounded retry. Graceful service
 shutdown drains the SDK usage queue before PostgreSQL closes.
 
+CLIProxyAPI v7.2.102 implements that queue as an unbounded FIFO despite the
+buffer argument to `usage.NewManager`. LLMGW therefore reserves one bounded
+generation permit after project-key authentication and before
+`AdmitGeneration`. A full or poisoned gate returns the stable infrastructure
+503 before a request row or SDK execution exists. Metadata, health, and denied
+routes do not consume permits.
+
+After every admitted generation handler returns (including abort and panic
+unwind), the middleware publishes a purpose-separated HMAC-authenticated
+barrier to the same SDK default usage manager. Before making downstream
+cancellation visible to the SDK, it first publishes an authenticated
+cancellation marker. The manager's single FIFO dispatcher therefore separates
+completed failover attempts from the active stream producer, which may publish
+its terminal usage before or after the handler returns. A normal barrier
+releases the permit after all earlier callbacks. A canceled barrier releases
+only after a successful attempt already persisted before the barrier, an active
+producer record persisted after the cancellation marker, or a late producer
+record persisted after the barrier. The vendored pin marks every
+`PublishAdditionalModel` record and emits all such records before its primary
+terminal record. A canceled group retains any number of authenticated
+auxiliary records and releases only on the durable primary. Each reviewed
+Codex response loop returns on its first `response.completed` or
+`response.incomplete`, so repeated terminal frames cannot create a later
+auxiliary record; the pinned terminal payload exposes at most one image-model
+usage object per executor attempt. A record after the primary/release is
+therefore an SDK compatibility violation and poisons the bridge before
+persistence.
+A persistence failure, missing terminal record, plugin panic, invalid
+principal, or tampered control record retains capacity fail-closed. Shutdown
+also waits for all permits to drain after SDK shutdown.
+
+The v7.2.102 per-request usage-record upper bound is:
+
+```text
+Amax = 2 * (request-retry + 1) * max-retry-credentials * (M + 1)
+queue records and controls <= usage-outstanding-capacity * (Amax + 2)
+```
+
+The leading factor of two covers one auxiliary image-model record plus the
+primary record, including an unsolicited response while image generation is
+disabled. `M` is the largest effective OpenAI-compatible model pool: distinct
+upstream model names sharing one case-insensitive alias within one enabled
+provider.
+`auth.Manager.executeMixedOnce` tries at most the configured credential count,
+iterates that model pool, and permits only one unauthorized refresh replay per
+credential. LLMGW rejects every mode other than fully disabled image generation
+and rejects SDK payload write rules because v7.2.102 applies those after image
+tool stripping and could otherwise restore the tool. LLMGW uses checked
+arithmetic and rejects configurations above 256 records per request, zero
+credential limits, negative retry counts, session affinity, Antigravity credits
+fallback, and auth-file retry overrides above the shared retry value.
+
+Runtime SDK config/auth watching is disabled so `R`, `C`, and `M` cannot grow
+after the proof. LLMGW deep-clones the validated SDK configuration and snapshots
+only the flat root JSON credentials that the initial SDK synthesizer reads. It
+counts every root entry before processing and rejects more than 256 entries,
+directories, symbolic links, sockets, other non-regular entries, and non-JSON
+names. Root and file opens use no-follow Unix operations anchored on directory
+file descriptors; each file is read twice with bounded size, stable metadata,
+and matching hashes. The private destination is `0700`, files are created
+`O_EXCL` as `0600`, and total content is capped at 16 MiB. The SDK receives only
+this immutable snapshot, which is removed at lifecycle cleanup. Provider auth
+rotation/import writes inputs for the next launch and requires a new OS process.
+
+CLIProxyAPI v7.2.102's process-global default usage manager cannot be reopened
+after `Shutdown`. LLMGW consequently enforces a process-wide
+`constructed -> consumed` one-shot lifecycle. Construction reserves the sole
+lease; `Close` before `Run` releases it without registering plugins. The first
+`Run` registers the required plugin and optional observers exactly once and
+permanently consumes the process. Startup failure, shutdown, or service return
+does not make a second in-process service safe; the supervisor must start a new
+OS process. `Close` before `Run` clears the old access registration and removes
+its private snapshot before releasing the construction lease, so a later
+construction cannot have its globals erased by stale cleanup.
+
 The durable request row guarantees the client-call count even if accounting is
 interrupted. A reconciler waits 30 seconds after request completion: a generation
 request with at least one persisted attempt becomes `observed`, while one with
@@ -485,6 +569,7 @@ schema. LLMGW owns one namespaced block:
 host: 127.0.0.1
 port: 8088
 auth-dir: ~/.llmgw/cliproxy-auth
+disable-image-generation: true
 
 remote-management:
   allow-remote: false
@@ -506,6 +591,7 @@ llmgw:
   postgres-dsn-env: LLMGW_POSTGRES_DSN
   key-pepper-env: LLMGW_KEY_PEPPER
   usage-retention-days: 35
+  usage-outstanding-capacity: 64
 ```
 
 The pinned SDK currently ignores unknown YAML fields, allowing it to load the
@@ -520,9 +606,14 @@ native auth directory. LLMGW's custom request access manager replaces
 CLIProxyAPI's public `api-keys` list. The `api-keys` field must be absent or
 empty; a non-empty value fails startup validation.
 
-Changes to native CLIProxyAPI fields and auth files follow the SDK's hot-reload
-behavior. Changes to the `llmgw` block require a graceful restart in the first
-version.
+For the v7.2.102 pin, `disable-image-generation` must resolve to the fully
+disabled `true` mode. Missing, false, zero, `chat`, and `passthrough` values
+fail startup. SDK payload default/override write rules also fail startup because
+this version applies them after image-tool stripping and can otherwise restore
+`image_generation`. Payload filter rules remain available.
+
+Changes to native CLIProxyAPI fields, auth files, or the `llmgw` block are read
+only by the next OS process. Runtime SDK config/auth watching is disabled.
 
 ### 12.1 Recommended account-pool policy
 
@@ -537,8 +628,8 @@ errors:
   quarantine, because `transient-error-cooldown-seconds` is `-1`;
 - cooldown state stays in memory and is not resurrected from `.cds` files after
   a restart;
-- auth-file hot reload makes a newly added or refreshed account eligible without
-  restarting LLMGW.
+- a newly added or refreshed auth file becomes eligible after the supervisor
+  starts a new LLMGW process.
 
 These are safe initial operational defaults, not hard-coded policy. Operators
 may tune them in the native configuration, and LLMGW's account-pool chaos tests
