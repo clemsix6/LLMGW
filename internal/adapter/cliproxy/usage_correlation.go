@@ -102,16 +102,44 @@ func (b *UsageBridge) reserve(requestID string) bool {
 
 // fail keeps the named permit held after an admitted attempt could not be
 // persisted. Other already-admitted groups may still drain.
+//
+// A failed group is never released: its usage is unaccounted, so returning the
+// permit would let the gateway keep spending against a budget it can no longer
+// measure. That makes the loss cumulative over the life of the process, and
+// once failures fill every permit the bridge can neither admit nor drain
+// anything. Report that as terminal rather than refusing every generation from
+// behind a healthy status route: the observer stops the service so its manager
+// restarts it, and reconciliation resolves the unaccounted requests.
 func (b *UsageBridge) fail(requestID string) {
 	if b == nil {
 		return
 	}
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if group, exists := b.active[requestID]; exists {
-		group.failed = true
-		b.signalLocked()
+	group, exists := b.active[requestID]
+	if !exists {
+		b.mu.Unlock()
+		return
 	}
+	group.failed = true
+	b.signalLocked()
+	stalled := b.stalledLocked()
+	b.mu.Unlock()
+	if stalled {
+		b.poison()
+	}
+}
+
+// stalledLocked reports that no permit can be reserved or returned again.
+func (b *UsageBridge) stalledLocked() bool {
+	if len(b.active) < b.capacity {
+		return false
+	}
+	for _, group := range b.active {
+		if !group.failed {
+			return false
+		}
+	}
+	return true
 }
 
 // release returns one healthy permit exactly once. A poisoned bridge or a

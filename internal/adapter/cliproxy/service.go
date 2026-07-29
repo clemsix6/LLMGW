@@ -2,7 +2,6 @@ package cliproxy
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/clemsix6/LLMGW/internal/config"
@@ -62,7 +61,7 @@ func newService(
 	build := serviceBuild(startup, middleware, &service, started)
 	proxy, clearAccess, err := build()
 	if err != nil {
-		return failServiceBuild(process, lease, startup, err)
+		return failServiceBuild(process, lease, err)
 	}
 	service = assembleService(
 		proxy, clearAccess, started, process, lease, startup,
@@ -124,21 +123,14 @@ func serviceBuild(
 	}
 }
 
-// failServiceBuild cleans the snapshot before releasing construction.
+// failServiceBuild releases the construction lease after a failed build.
 func failServiceBuild(
 	process *sdkProcessState,
 	lease *sdkConstructionLease,
-	startup *sdkStartupSnapshot,
 	buildErr error,
 ) (*Service, error) {
-	cleanupErr := startup.Cleanup()
-	if cleanupErr == nil {
-		process.releaseConstruction(lease)
-	}
-	return nil, fmt.Errorf(
-		"construct embedded CLIProxyAPI service:\n%w",
-		errors.Join(buildErr, cleanupErr),
-	)
+	process.releaseConstruction(lease)
+	return nil, fmt.Errorf("construct embedded CLIProxyAPI service:\n%w", buildErr)
 }
 
 // assembleService attaches lifecycle and usage ownership after a successful Build.
