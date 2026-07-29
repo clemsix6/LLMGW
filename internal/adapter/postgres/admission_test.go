@@ -345,5 +345,3 @@ func TestAdmissionWarningAndLifecycle(t *testing.T) {
 	assertMetadataCompleted(t, ctx, store, metadata.ID, completedAt)
 	assertRequestUnchanged(t, ctx, store, other.ID)
 }
-
-// TestAdmissionConcurrency verifies the real transaction lock admits exactly the call cap.

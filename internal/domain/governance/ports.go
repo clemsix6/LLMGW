@@ -19,8 +19,6 @@ type KeyRepository interface {
 	MarkKeyUsed(context.Context, int64, time.Time) error
 	// RevokeKey records a key's revocation time.
 	RevokeKey(context.Context, int64, time.Time) error
-	// ExpireKey records a key's expiry time.
-	ExpireKey(context.Context, int64, time.Time) error
 }
 
 // RequestRepository persists request admission and completion.

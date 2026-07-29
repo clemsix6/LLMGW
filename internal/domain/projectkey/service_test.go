@@ -353,15 +353,6 @@ func (r *memoryKeyRepository) RevokeKey(_ context.Context, keyID int64, revokedA
 	return nil
 }
 
-// ExpireKey records a key's expiry.
-func (r *memoryKeyRepository) ExpireKey(_ context.Context, keyID int64, expiresAt time.Time) error {
-	publicID := r.publicIDForID(keyID)
-	key := r.keys[publicID]
-	key.ExpiresAt = timePointer(expiresAt)
-	r.keys[publicID] = key
-	return nil
-}
-
 // publicIDForID resolves the public identifier for a database identifier.
 func (r *memoryKeyRepository) publicIDForID(keyID int64) string {
 	for publicID, key := range r.keys {

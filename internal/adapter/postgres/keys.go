@@ -160,14 +160,6 @@ func (s *Store) RevokeKey(ctx context.Context, keyID int64, revokedAt time.Time)
 	return nil
 }
 
-// ExpireKey records one project key's expiry.
-func (s *Store) ExpireKey(ctx context.Context, keyID int64, expiresAt time.Time) error {
-	if _, err := s.pool.Exec(ctx, `UPDATE client_key SET expires_at = $2 WHERE id = $1`, keyID, expiresAt); err != nil {
-		return fmt.Errorf("update project key expiry:\n%w", err)
-	}
-	return nil
-}
-
 // ensureKeyProject returns the named project identifier, creating the project when absent.
 func ensureKeyProject(ctx context.Context, tx pgx.Tx, project string) (int64, error) {
 	const query = `

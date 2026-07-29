@@ -77,13 +77,6 @@ func (s *StubUpstream) RequestCount() int {
 	return len(s.authorizations)
 }
 
-// ActiveRequestCount returns upstream handlers that have not yet returned.
-func (s *StubUpstream) ActiveRequestCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.active
-}
-
 // ResponseStatuses returns the exact upstream statuses served so far.
 func (s *StubUpstream) ResponseStatuses() []int {
 	s.mu.Lock()
