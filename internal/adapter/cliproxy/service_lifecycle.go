@@ -427,9 +427,6 @@ func (s *Service) releaseAfterDelayedSDKReturn(proxyDone <-chan error) {
 	if s.clearAccess != nil {
 		s.clearOnce.Do(s.clearAccess)
 	}
-	if s.startup != nil {
-		_ = s.startup.Cleanup()
-	}
 }
 
 // startupCompatibilityError reports a missing pinned-SDK readiness event.
@@ -516,12 +513,9 @@ func (s *Service) finish(err error) {
 		if s.clearAccess != nil {
 			s.clearOnce.Do(s.clearAccess)
 		}
-		if s.startup != nil {
-			err = errors.Join(err, s.startup.Cleanup())
-			s.mu.Lock()
-			s.runErr = err
-			s.mu.Unlock()
-		}
+		s.mu.Lock()
+		s.runErr = err
+		s.mu.Unlock()
 		close(s.runDone)
 	})
 }
