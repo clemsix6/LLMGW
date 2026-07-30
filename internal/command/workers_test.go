@@ -50,7 +50,7 @@ func TestStartWorkersRunsImmediateReconcileAndStopsOnCancel(t *testing.T) {
 	repo := &stubWorkerRepository{}
 	ctx, cancel := context.WithCancel(context.Background())
 
-	done := StartWorkers(ctx, repo, time.Hour)
+	done := StartWorkers(ctx, repo, time.Hour, nil)
 	cancel()
 
 	select {

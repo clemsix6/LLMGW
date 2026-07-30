@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/clemsix6/LLMGW/internal/config"
+	"github.com/clemsix6/LLMGW/internal/domain/governance/alert"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 )
 
@@ -49,7 +50,7 @@ func TestServeFailsBeforeSDKConstruction(t *testing.T) {
 			cfg := validServeConfig()
 			builds := 0
 			deps := successfulServeDependencies(&cfg, nil)
-			deps.buildService = func(config.Config, *serveStore, []byte) (serveService, error) {
+			deps.buildService = func(config.Config, *serveStore, []byte, *alert.Tracker) (serveService, error) {
 				builds++
 				return &fakeServeService{}, nil
 			}
@@ -69,7 +70,7 @@ func TestServeFailsBeforeSDKConstruction(t *testing.T) {
 func TestServeRejectsUnexpectedCleanSDKReturn(t *testing.T) {
 	cfg := validServeConfig()
 	deps := successfulServeDependencies(&cfg, nil)
-	deps.buildService = func(config.Config, *serveStore, []byte) (serveService, error) {
+	deps.buildService = func(config.Config, *serveStore, []byte, *alert.Tracker) (serveService, error) {
 		return &fakeServeService{run: func(context.Context) error { return nil }}, nil
 	}
 	if err := runServeWith(
@@ -145,11 +146,11 @@ func successfulServeDependencies(cfg *config.Config, add func(string)) serveDepe
 			add("open")
 			return store, nil
 		},
-		buildService: func(config.Config, *serveStore, []byte) (serveService, error) {
+		buildService: func(config.Config, *serveStore, []byte, *alert.Tracker) (serveService, error) {
 			add("sdk-construct")
 			return &fakeServeService{}, nil
 		},
-		startWorkers: func(ctx context.Context, _ *serveStore, _ time.Duration) <-chan struct{} {
+		startWorkers: func(ctx context.Context, _ *serveStore, _ time.Duration, _ *alert.Tracker) <-chan struct{} {
 			add("workers-start")
 			done := make(chan struct{})
 			go func() {

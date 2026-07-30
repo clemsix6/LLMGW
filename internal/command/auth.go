@@ -11,6 +11,7 @@ import (
 	"github.com/clemsix6/LLMGW/internal/adapter/cliproxy"
 	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
 	"github.com/clemsix6/LLMGW/internal/config"
+	"github.com/clemsix6/LLMGW/internal/domain/governance/alert"
 	sdkauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
 )
 
@@ -107,6 +108,12 @@ func runAuthLogin(
 	args authLoginArguments,
 	streams Streams,
 ) error {
+	// Resolved before the login runs, and in this leaf rather than in the auth
+	// dispatch: a malformed webhook variable must leave auth list untouched.
+	notifier, err := newOperatorNotifier(cfg, streams)
+	if err != nil {
+		return err
+	}
 	metadata := map[string]string(nil)
 	if args.device {
 		metadata = map[string]string{"codex_login_mode": "device"}
@@ -120,6 +127,7 @@ func runAuthLogin(
 	if _, err := fmt.Fprintf(streams.Out, "path\t%s\nprovider\t%s\nlabel\t%s\n", path, info.Provider, info.Label); err != nil {
 		return fmt.Errorf("write auth login:\n%w", err)
 	}
+	notifier.emit(alert.KindCredentialAdded, credentialAddedFields(info)...)
 	return nil
 }
 
@@ -137,6 +145,13 @@ func runAuthList(ctx context.Context, cfg config.Config, streams Streams) error 
 }
 
 func runAuthImportLegacy(ctx context.Context, cfg config.Config, streams Streams) error {
+	// Resolved before the import writes anything, and in this leaf rather than
+	// in the auth dispatch: a malformed webhook variable must leave auth list
+	// untouched.
+	notifier, err := newOperatorNotifier(cfg, streams)
+	if err != nil {
+		return err
+	}
 	dsn, err := cfg.DatabaseDSN(streams.Getenv)
 	if err != nil {
 		return fmt.Errorf("resolve auth database:\n%w", err)
@@ -159,6 +174,7 @@ func runAuthImportLegacy(ctx context.Context, cfg config.Config, streams Streams
 			return fmt.Errorf("write legacy import:\n%w", err)
 		}
 	}
+	notifier.emit(alert.KindCredentialsImported, importedCredentialsFields(results)...)
 	return nil
 }
 
