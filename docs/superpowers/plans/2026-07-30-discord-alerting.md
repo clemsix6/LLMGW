@@ -165,6 +165,36 @@ Batch 5 landed at `f336dbc`. What Batch 6 must know:
 - Task 5.2 produced four test files. `test/integration/harness_test.go` still
   passes `nil` to `NewMiddleware` — Batch 6's replacement point, compiling.
 
+## As-built after Batch 6 — integration suite and documentation
+
+Batch 6 landed at `b7d2634`, completing the feature.
+
+- **The sink helpers are not the plan's signatures.** As built, in
+  `test/integration/alert_sink_test.go`: `Mark() int`,
+  `Wait(from int, kind alert.Kind, match []alert.Field, timeout time.Duration) (alert.Event, bool)`,
+  `CountFor(from int, kind alert.Kind, match []alert.Field) int`. The plan's
+  `Wait(kind, timeout)` resolved "the first event of that kind" by file order
+  across a package-wide sink, and `CountFor(kind, contains string)` could not
+  express an entity spread over separate `Provider`, `Credential`, `Model` and
+  `Status` fields.
+- **The dedup case rides a repeated 5xx, not a 429.** The plan's 429 version was
+  vacuous: a 429 puts the (credential, model) pair into an SDK model cooldown,
+  so the next request is answered `429 model_cooldown` without contacting
+  upstream — the count is 1 because nothing was retried, not because the engine
+  suppressed anything. `transient-error-cooldown-seconds: -1` is what makes a
+  5xx recur against the same credentials, so the engine's `state == delivered`
+  check is what the case actually pins. Mutation-verified: deleting that check
+  makes the count 3.
+- Aliases used: `cooldown-other-model` (429) and `cooldown-no-reset-model`
+  (5xx). A second was needed because the 429 quarantines its own alias.
+- SDK behaviour under total upstream failure, previously unrecorded: every
+  attempt of a fully-failed request still emits one usage record, and the client
+  receives the upstream status verbatim (502, not a synthesized code). Credential
+  IDs render as `codex:apikey:<12 hex>` and differ per process.
+- `7efb999` had deleted every helper capable of driving a codex alias;
+  `codexGeneration`, `codexUsageResponse` and a parameterless `codexRateLimit`
+  were restored from `7efb999^`.
+
 **Process note for any future batch: `parallel` is unsafe when tasks are
 red-first under a whole-tree gate.** Batch 3's two parallel tasks each run
 `go vet ./...`, `go build ./...` and `go test ./internal/...`, so each would
