@@ -299,10 +299,16 @@ Detected from `governance.Admission`, for **generation admissions only**.
 | `budget_warning` | warning | first breach of a `warn` budget for that key |
 | `budget_cleared` | info | a generation admission for that project no longer carries the breach |
 
-Fields: project name, dimension, window, limit, reset time.
+Fields: project name, dimension, window, limit, reset time — except
+`budget_cleared`, which carries project name, dimension, window and limit but no
+reset time. Clearing is triggered by a breach's *absence*, so there is no
+`BudgetBreach` left to read: the limit is carried over from the breach that was
+notified, while a reset time for a window that has already rolled over would be
+meaningless.
 
 Clearing is defined as absence from `Blocks ∪ Warnings` of a generation
-admission for that project. Metadata requests carry an empty always-allowed
+admission for that project. When one admission clears two budgets of the same
+project, the two events have no defined order. Metadata requests carry an empty always-allowed
 `Admission`, so treating them as evidence would post `budget_cleared` while
 generations are still being denied.
 
@@ -506,9 +512,12 @@ will appear in the Discord channel.
   (entity, kind); a severity escalation passes it; a suppressed transition is
   re-emitted on the next observation; a rejected `Notify` leaves the delivered
   state untouched so the next observation retries; the key state never moves
-  backwards; a live-caller repository error marks the database down while a
-  cancelled caller does not; client 4xx statuses leave credential state
-  untouched; `generation_failures` needs three consecutive 5xx.
+  backwards; client 4xx statuses leave credential state untouched;
+  `generation_failures` needs three consecutive 5xx.
+- **Adapter unit tests, SDK side** — the observation contract of §5.1, which is
+  not expressible in the domain because `ObserveDatabase` takes no context: a
+  live-caller repository error marks the database down while a cancelled caller
+  does not, and control records never reach `ObserveAttempt`.
 - **Adapter unit tests** — against `httptest`: payload shape and colour per
   severity, `Retry-After` honoured on 429, retry exhaustion drops rather than
   blocks, a saturated queue drops and reports false, `Close` drains newest-first

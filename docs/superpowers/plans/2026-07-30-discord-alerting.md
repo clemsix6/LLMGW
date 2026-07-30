@@ -14,8 +14,44 @@ itself changes state.
 request; `internal/command` wires the two and feeds them from the middleware, an
 extra SDK usage plugin, and the background workers.
 
-**Tech Stack:** Go 1.24, embedded CLIProxyAPI v7.2.102 SDK, PostgreSQL,
-`net/http`, `testing` + `httptest`, testcontainers for the integration suite.
+**Tech Stack:** Go 1.26 (per `go.mod`), embedded CLIProxyAPI v7.2.102 SDK,
+PostgreSQL, `net/http`, `testing` + `httptest`, testcontainers for the
+integration suite.
+
+## As-built after Batch 1 — read before implementing anything else
+
+Batch 1 landed at `f82ecb6`. The engine differs from this plan's pseudo-code in
+ways later batches build on:
+
+- The primitive is
+  `transitionLocked(key, state string, healthy bool, kind Kind, summary string, fields []Field)`,
+  split into `shouldEmitLocked` / `escalates` / `commitLocked`. `entry` carries
+  `deliveredKind` and `deliveredHealthy` beyond the four fields shown below.
+- **Every observer holds the tracker mutex across `Notify`.** Therefore
+  `Webhook.Notify` must never block and must never call back into the tracker.
+  This is a hard constraint on Batch 2, not a preference.
+- The window is bypassed only when the incoming kind outranks the last delivered
+  kind **and** the delivered state was degraded — a never-delivered kind already
+  bypasses it, so an unconditional severity comparison would let a credential
+  flapping 429/ok burst through.
+- `ObserveAttempt` zeroes the status when `!failed`, so `credential_recovered`
+  renders no status field, and it returns early on an empty credential ID.
+- `ObserveGeneration` keeps its counter and last status on `Tracker`; below
+  three consecutive failures it does not transition at all.
+  `generation_recovered` carries `Consecutive failures: 0`.
+- `ObserveProjectKeys` also skips an expiry further than 7 days away, which the
+  plan's bare "otherwise → expiring" did not. The lifetime skip boundary is
+  `<=`: exactly 7 days is skipped.
+- Database events carry no fields. `New` defaults a nil `now` to `time.Now`.
+- `budget_cleared` carries project, dimension, window **and limit** — the limit
+  is carried over from the notified breach. Spec §6.4 was amended to match. When
+  one admission clears two budgets of the same project, the events have **no
+  defined order**: Task 6.2 must not assert one.
+- `titleOf` is unexported and has no accessor. **Task 2.1 adds
+  `func (k Kind) Title() string` to `internal/domain/governance/alert/event.go`**
+  — the renderer needs the title and must not maintain a second copy of it. That
+  is the one domain file a Batch 2 task may touch, and only for that accessor
+  plus its test.
 
 **Spec:** `docs/superpowers/specs/2026-07-30-discord-alerting-design.md`
 (approved at commit `851f9b0`). Where this plan and the spec disagree, the spec
@@ -107,9 +143,15 @@ type Event struct {
     At       time.Time
 }
 
+// Notify is called with the tracker's mutex held: it must never block and must
+// never call back into the tracker.
 type Notifier interface {
     Notify(Event) bool
 }
+
+// Title is the human title of a kind, shared by Emit summaries and the Discord
+// renderer. Added by Task 2.1.
+func (k Kind) Title() string
 
 // CredentialLabel is the operator-facing identity of one provider credential.
 type CredentialLabel struct {
@@ -489,9 +531,14 @@ EOF
 **Files:**
 - Create: `internal/adapter/discord/render.go`
 - Test: `internal/adapter/discord/render_test.go`
+- Modify: `internal/domain/governance/alert/event.go` — add
+  `func (k Kind) Title() string` over the existing unexported `titleOf` table,
+  with its docstring, and one test asserting a known kind and an unknown one.
+  This is the only domain change this batch may make; it exists because the
+  renderer needs the title and a second copy of it would drift.
 
 **Interfaces:**
-- Consumes: `alert.Event`, `alert.Severity`.
+- Consumes: `alert.Event`, `alert.Severity`, `alert.Kind.Title`.
 - Produces: `func renderPayload(event alert.Event) ([]byte, error)` — unexported;
   Task 2.2 calls it from the same package.
 
@@ -560,7 +607,10 @@ when the caller passes nil), drain attempt `3s`, max `Retry-After` `30s`.
 
 - Buffered channel of 256. `Notify` uses `select` with `default` — never blocks.
   It returns false when the queue is full or after `Close`, and logs the drop
-  with a running count.
+  with a running count. **The tracker calls `Notify` while holding its mutex**
+  (see "As-built after Batch 1"), so `Notify` must not block, must not perform
+  I/O, and must never call back into the tracker. Everything slow belongs to the
+  delivery goroutine.
 - One goroutine consumes the channel. Steady state: up to 3 attempts, backoff
   between them, on transport errors and 5xx. A 4xx other than 429 is permanent —
   no retry. On 429, honour `Retry-After` capped at `maxRetryAfter`. At least
@@ -1113,13 +1163,14 @@ share the entity in the same process and make the count depend on file order.
 
 - [ ] **Step 1: Write the tests**
 
-A stub upstream forced to 429 produces one `credential_rate_limited` payload
+A stub upstream forced to 429 produces one `credential_rate_limited` event
 naming the provider and the model; the same credential never appears twice. A
 project whose `calls` budget is exhausted produces one `budget_blocked` naming
 the project, dimension and window. Repeated upstream 5xx produce
 `generation_failures` on the third admitted generation and not before.
 Assertions check kind, severity and the presence of identifying fields — never
-exact wording.
+exact wording, and **never an order between two `budget_cleared` events** of the
+same project, which the engine does not define.
 
 - [ ] **Step 2:** Run `just test-integration`. Retry transient upstream errors
   with bounded backoff; never retry the gateway's own 402 or 503, which are the
@@ -1187,5 +1238,5 @@ EOF
 | §11 operator commands, delivery failure is a warning | 5.1, 5.2 |
 | §12 privacy | 1.1 (field sets), 1.2 (assertion), 5.1 (bounded stop reason) |
 | §13 limitations | documentation only, no task |
-| §14 testing | 1.2, 2.3, 5.2, 6.1, 6.2 |
+| §14 testing | 1.2, 2.3, 4.1 (the observation-contract cases), 5.2, 6.1, 6.2 |
 | §15 deployment | 6.3 |
