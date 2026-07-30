@@ -154,6 +154,9 @@ func fieldValue(event alert.Event, name string) string {
 	return ""
 }
 
+// TestTrackerEmitsOncePerTransition pins the engine's premise: one message per
+// state change, not per occurrence, carrying the severity its kind fixes and
+// the tracker's own clock.
 func TestTrackerEmitsOncePerTransition(t *testing.T) {
 	sink := newNotifier()
 	tracker := newTracker(sink, newClock())
@@ -172,6 +175,9 @@ func TestTrackerEmitsOncePerTransition(t *testing.T) {
 	}
 }
 
+// TestEmitCarriesOnlyTheCallerFields pins that a one-shot event holds no
+// tracked state: it adds no field of its own, so nothing beyond what the caller
+// passed can reach the channel.
 func TestEmitCarriesOnlyTheCallerFields(t *testing.T) {
 	sink := newNotifier()
 	tracker := newTracker(sink, newClock())
