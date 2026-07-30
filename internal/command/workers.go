@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
 	"github.com/clemsix6/LLMGW/internal/domain/governance"
 )
 
@@ -17,11 +18,16 @@ const (
 
 // workerRepository contains only the lifecycle methods used by background workers.
 type workerRepository interface {
+	governance.KeyExpiryReader
+
 	// ReconcileAccounting resolves delayed and stale request accounting.
 	ReconcileAccounting(context.Context, time.Time, time.Duration, time.Duration) (governance.ReconcileResult, error)
 	// PruneCompletedRequests deletes completed request trees older than retention.
 	PruneCompletedRequests(context.Context, time.Duration) (int64, error)
 }
+
+// var _ workerRepository confirms the production store satisfies the widened worker seam.
+var _ workerRepository = (*postgres.Store)(nil)
 
 // StartWorkers starts background accounting reconciliation and completed request retention.
 func StartWorkers(ctx context.Context, repo workerRepository, retention time.Duration) <-chan struct{} {
