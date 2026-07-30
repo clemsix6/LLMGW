@@ -500,6 +500,16 @@ will appear in the Discord channel.
   legitimate expired key is indistinguishable from a scan. The sweep covers
   expiry instead.
 - **`budget_cleared` requires traffic.** See §6.4.
+- **A queued alert is not a delivered alert.** The tracker records an entity as
+  notified when the event enters the delivery queue, because a callback from the
+  delivery goroutine would have to re-enter the tracker's lock. If Discord then
+  refuses the event for all three attempts, or the shutdown drain runs out of
+  budget, that transition is lost with only a log line behind it — and no later
+  message corrects it while the entity's state holds. This narrows §5.2's "an
+  alert can be late; it cannot be silently lost" to the queueing boundary:
+  saturation and suppression are recoverable, a failed delivery is not. The case
+  requires Discord to be unavailable across three attempts, in which case the
+  alerts that follow are equally unlikely to arrive.
 - **Dedup state is lost on restart.** Deliberate (§5.2). Expiry
   re-announcement is bounded by the 30-day window (§6.3); everything else is
   re-derived from live observation.

@@ -47,11 +47,35 @@ ways later batches build on:
   is carried over from the notified breach. Spec §6.4 was amended to match. When
   one admission clears two budgets of the same project, the events have **no
   defined order**: Task 6.2 must not assert one.
-- `titleOf` is unexported and has no accessor. **Task 2.1 adds
-  `func (k Kind) Title() string` to `internal/domain/governance/alert/event.go`**
-  — the renderer needs the title and must not maintain a second copy of it. That
-  is the one domain file a Batch 2 task may touch, and only for that accessor
-  plus its test.
+- The kind title had an unexported accessor `title()` with nine call sites.
+  Task 2.1 **promoted it to `Title()`** rather than adding a second wrapper, so
+  the rename touched every file in the `alert` package. `title()` no longer
+  exists: any later code written against it will not compile.
+
+## As-built after Batch 2 — the adapter
+
+Batch 2 landed at `54bf9b5`. What later batches must know:
+
+- **`Close`'s error contract**, which Batch 5 logs in its deferred block: `nil`
+  on a nil receiver, on a second call, and on a complete drain — individual
+  delivery failures are logged, not returned. A **wrapped `ctx.Err()`** means
+  only that the drain was cut short. Batch 5 must not treat a non-nil `Close`
+  error as a startup-class failure, and must not let it change the process exit
+  status.
+- On an early `Close` return the delivery goroutine outlives `Close` by design.
+  There is no signal that the socket is free; fine at shutdown, but do not
+  assume otherwise.
+- The renderer **omits `description` when it equals the title**, and Batch 1
+  sets `Summary` to the kind title for nearly every event. **Batch 6 must not
+  assert a `description` on those events.**
+- Fields with an empty name or value are skipped: Discord answers 400 on an
+  empty field value, and a 400 is permanent, so the whole alert would vanish.
+- `Retry-After` is parsed as a float — Discord sends fractional seconds.
+- The per-attempt bound is a `context.WithTimeout` per request; `client.Timeout`
+  is only the nil-client fallback. `newWithTimings` tolerates a nil client and a
+  nil clock.
+- **`Notify` returning `true` means queued, not delivered.** See the accepted
+  limitation added to spec §13.
 
 **Spec:** `docs/superpowers/specs/2026-07-30-discord-alerting-design.md`
 (approved at commit `851f9b0`). Where this plan and the spec disagree, the spec
@@ -82,8 +106,9 @@ reduces it: Task 4.1**, which changes a signature whose out-of-package callers
 belong to its batch's integration task. Note that `just vet` is `go vet ./...`,
 which type-checks the whole tree including tests — a reduced gate must narrow
 `vet` and `build` to the package under work, not merely skip `test-unit`. Every
-other task passes the full gate as written. Batches 3 to 6 need Docker: the
-PostgreSQL unit tests use testcontainers, and a missing daemon makes them skip
+other task passes the full gate as written. **Every batch needs Docker**, not
+only those touching PostgreSQL: `just test-unit` runs `./internal/...`, which
+includes the testcontainers packages, and a missing daemon makes them skip
 rather than fail — a skipped test is not a pass.
 
 ## Frozen Interfaces
@@ -609,8 +634,9 @@ when the caller passes nil), drain attempt `3s`, max `Retry-After` `30s`.
   It returns false when the queue is full or after `Close`, and logs the drop
   with a running count. **The tracker calls `Notify` while holding its mutex**
   (see "As-built after Batch 1"), so `Notify` must not block, must not perform
-  I/O, and must never call back into the tracker. Everything slow belongs to the
-  delivery goroutine.
+  network I/O, and must never call back into the tracker. Everything slow
+  belongs to the delivery goroutine. The drop log that spec §9 requires is the
+  one exception and stays.
 - One goroutine consumes the channel. Steady state: up to 3 attempts, backoff
   between them, on transport errors and 5xx. A 4xx other than 429 is permanent —
   no retry. On 429, honour `Retry-After` capped at `maxRetryAfter`. At least
