@@ -169,12 +169,25 @@ func runAuthImportLegacy(ctx context.Context, cfg config.Config, streams Streams
 	if err != nil {
 		return err
 	}
+	if err := printLegacyImports(streams.Out, results); err != nil {
+		return err
+	}
+	notifier.emit(alert.KindCredentialsImported, importedCredentialsFields(results)...)
+	return nil
+}
+
+// printLegacyImports writes the per-credential outcome of one legacy import.
+func printLegacyImports(out io.Writer, results []cliproxy.LegacyImport) error {
 	for _, result := range results {
-		if _, err := fmt.Fprintf(streams.Out, "provider\t%s\nlabel\t%s\nstatus\t%s\n", result.Provider, result.Label, result.Status); err != nil {
+		_, err := fmt.Fprintf(
+			out,
+			"provider\t%s\nlabel\t%s\nstatus\t%s\n",
+			result.Provider, result.Label, result.Status,
+		)
+		if err != nil {
 			return fmt.Errorf("write legacy import:\n%w", err)
 		}
 	}
-	notifier.emit(alert.KindCredentialsImported, importedCredentialsFields(results)...)
 	return nil
 }
 

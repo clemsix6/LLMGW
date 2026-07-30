@@ -93,12 +93,9 @@ func stoppingReason(ctx context.Context, serviceStarted bool) string {
 	}
 }
 
-// credentialLabels renders provider credential IDs as the operator-facing names
-// alert events carry.
+// credentialLabels reads the local credentials whose names alert events carry.
 //
-// Disabled entries are included: the map only renders names, and a disabled
-// credential's events should still read well. A lookup failure degrades to an
-// unlabelled tracker and never fails startup.
+// A lookup failure degrades to an unlabelled tracker and never fails startup.
 func credentialLabels(ctx context.Context, cfg config.Config) map[string]alert.CredentialLabel {
 	if cfg.Proxy == nil {
 		return nil
@@ -108,7 +105,16 @@ func credentialLabels(ctx context.Context, cfg config.Config) map[string]alert.C
 		log.Printf("llmgw: discord alert credential labels unavailable: %v", err)
 		return nil
 	}
+	return credentialLabelMap(auths)
+}
 
+// credentialLabelMap keys the operator-facing identity of every local credential
+// by the credential ID alert events carry, which is what turns an opaque file
+// name into a provider and an account.
+//
+// Disabled entries are included: the map only renders names, and a disabled
+// credential's events should still read well.
+func credentialLabelMap(auths []cliproxy.AuthInfo) map[string]alert.CredentialLabel {
 	labels := make(map[string]alert.CredentialLabel, len(auths))
 	for _, auth := range auths {
 		labels[auth.ID] = alert.CredentialLabel{Provider: auth.Provider, Label: auth.Label}

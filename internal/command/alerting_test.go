@@ -120,6 +120,45 @@ func TestOperatorNotifierEmitSurvivesAnUnreachableWebhook(t *testing.T) {
 	}
 }
 
+// TestCredentialLabelMapKeysEveryCredentialByItsID proves the one conversion
+// that makes a credential alert readable: without it an event names an opaque
+// file, and a provider/label swap or a wrong key would mislabel every one of
+// them with nothing else in the tree noticing.
+func TestCredentialLabelMapKeysEveryCredentialByItsID(t *testing.T) {
+	auths := []cliproxy.AuthInfo{
+		{ID: "claude-ops-example-com.json", Provider: "claude", Label: "ops@example.com"},
+		// Disabled entries are kept: the map only renders names, and a disabled
+		// credential's events should still read well.
+		{ID: "codex-ci-example-com.json", Provider: "codex", Label: "ci@example.com", Disabled: true},
+	}
+
+	labels := credentialLabelMap(auths)
+	if len(labels) != len(auths) {
+		t.Fatalf("labels = %d, want %d", len(labels), len(auths))
+	}
+	for _, auth := range auths {
+		label, ok := labels[auth.ID]
+		if !ok {
+			t.Fatalf("credential %q is unlabelled", auth.ID)
+		}
+		if label.Provider != auth.Provider {
+			t.Fatalf("provider = %q, want %q", label.Provider, auth.Provider)
+		}
+		if label.Label != auth.Label {
+			t.Fatalf("label = %q, want %q", label.Label, auth.Label)
+		}
+	}
+}
+
+// TestCredentialLabelMapWithoutCredentialsIsEmpty proves the empty auth
+// directory every fresh deployment starts with yields a usable map rather than
+// a surprise.
+func TestCredentialLabelMapWithoutCredentialsIsEmpty(t *testing.T) {
+	if labels := credentialLabelMap(nil); len(labels) != 0 {
+		t.Fatalf("labels = %d, want 0", len(labels))
+	}
+}
+
 // TestCreatedKeyFieldsRenderIdentityWithoutThePlaintext proves the operator
 // event names the key, carries the expiry only when there is one, and never
 // carries the one-time secret the command printed locally.
