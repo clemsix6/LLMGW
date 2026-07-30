@@ -2,6 +2,7 @@ package alert_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/clemsix6/LLMGW/internal/domain/governance/alert"
 )
@@ -73,6 +74,68 @@ func TestDatabaseTransitions(t *testing.T) {
 	tracker.ObserveDatabase(true)
 
 	assertKinds(t, sink, alert.KindDatabaseUnavailable, alert.KindDatabaseRestored)
+}
+
+// TestRejectedDatabaseRestoreIsRetried pins that the lock-free hot path never
+// costs an alert: a restore the notifier refuses leaves the outage owed, so the
+// next success offers it again instead of returning at the guard.
+func TestRejectedDatabaseRestoreIsRetried(t *testing.T) {
+	sink := newNotifier()
+	tracker := newTracker(sink, newClock())
+
+	tracker.ObserveDatabase(false)
+
+	sink.setAccepted(false)
+	tracker.ObserveDatabase(true)
+
+	sink.setAccepted(true)
+	tracker.ObserveDatabase(true)
+
+	assertKinds(t,
+		sink,
+		alert.KindDatabaseUnavailable,
+		alert.KindDatabaseRestored,
+		alert.KindDatabaseRestored,
+	)
+}
+
+// TestSuppressedDatabaseRestoreIsDeferred pins the same guarantee for the other
+// way a restore is withheld: the anti-flap window defers it, and the outage
+// stays owed until a later success carries it past the window.
+func TestSuppressedDatabaseRestoreIsDeferred(t *testing.T) {
+	sink := newNotifier()
+	clock := newClock()
+	tracker := newTracker(sink, clock)
+
+	tracker.ObserveDatabase(false)
+
+	clock.Advance(alert.DefaultWindow + time.Minute)
+	tracker.ObserveDatabase(true)
+
+	clock.Advance(time.Minute)
+	tracker.ObserveDatabase(false)
+
+	// Inside the restore kind's window, and a de-escalation, so it is withheld.
+	clock.Advance(time.Minute)
+	tracker.ObserveDatabase(true)
+
+	assertKinds(t,
+		sink,
+		alert.KindDatabaseUnavailable,
+		alert.KindDatabaseRestored,
+		alert.KindDatabaseUnavailable,
+	)
+
+	clock.Advance(alert.DefaultWindow)
+	tracker.ObserveDatabase(true)
+
+	assertKinds(t,
+		sink,
+		alert.KindDatabaseUnavailable,
+		alert.KindDatabaseRestored,
+		alert.KindDatabaseUnavailable,
+		alert.KindDatabaseRestored,
+	)
 }
 
 // TestHealthFieldNames pins the exact field set of the generation and database
