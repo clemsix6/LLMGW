@@ -131,8 +131,12 @@ func (w *Webhook) consume() {
 	defer close(w.done)
 
 	for {
-		// A plain two-case select picks randomly when both are ready, so the
-		// stop signal is tested on its own first.
+		// A plain two-case select picks randomly when both are ready, so a stop
+		// already signalled is tested on its own first. That check is not atomic
+		// with the select below: a stop landing in between can still let one
+		// last event take the steady-state path. The cost is bounded to that one
+		// event and one attempt, since wait returns false once stopping is
+		// closed — the same position as an attempt already in flight at Close.
 		if w.stopped() || !w.waitThrottle() {
 			return
 		}

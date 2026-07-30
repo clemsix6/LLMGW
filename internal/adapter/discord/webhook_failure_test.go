@@ -96,7 +96,12 @@ func assertOnlyStuckAttemptDelivered(t *testing.T, webhook *Webhook, stub *recor
 	}
 }
 
-func TestWebhookNotifyDoesNotBlockOnUnresponsiveServer(t *testing.T) {
+// TestWebhookNotifyPerformsNoDeliveryItself proves Notify hands the event to
+// the delivery goroutine rather than touching the socket: it returns while an
+// attempt is stuck in flight against a server that never answers. The queue has
+// free slots here, so this case says nothing about a saturated one — that is
+// TestWebhookRefusesWhenQueueSaturated.
+func TestWebhookNotifyPerformsNoDeliveryItself(t *testing.T) {
 	webhook, _, _ := stalledWebhook(t)
 
 	accepted := make(chan bool, 1)
