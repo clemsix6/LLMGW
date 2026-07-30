@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/clemsix6/LLMGW/internal/domain/governance"
+	"github.com/clemsix6/LLMGW/internal/domain/governance/alert"
 	"github.com/clemsix6/LLMGW/internal/domain/projectkey"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -34,6 +35,7 @@ type Middleware struct {
 	now      func() time.Time             // now supplies lifecycle timestamps.
 	bridge   *UsageBridge                 // bridge owns generation permits and FIFO barriers.
 	ready    <-chan struct{}              // ready closes when the SDK can actually serve.
+	tracker  *alert.Tracker               // tracker observes admissions, generations and database health.
 }
 
 // errorEnvelope is the stable outer JSON error shape.
@@ -60,13 +62,23 @@ type budgetErrorDetail struct {
 }
 
 // NewMiddleware builds the global LLMGW governance middleware for the SDK.
+//
+// A nil tracker disables alert observation: every Tracker method returns
+// immediately on a nil receiver, so no observation point needs a guard.
 func NewMiddleware(
 	keys KeyAuthenticator,
 	requests governance.RequestRepository,
 	now func() time.Time,
 	bridge *UsageBridge,
+	tracker *alert.Tracker,
 ) *Middleware {
-	return &Middleware{keys: keys, requests: requests, now: now, bridge: bridge}
+	return &Middleware{
+		keys:     keys,
+		requests: requests,
+		now:      now,
+		bridge:   bridge,
+		tracker:  tracker,
+	}
 }
 
 // Handler exposes the concrete bridge-bound middleware to Gin.
@@ -169,10 +181,15 @@ func (m *Middleware) admit(
 		}
 		return
 	}
-	if class == RouteGeneration && !admission.Allowed {
-		m.bridge.release(request.ID)
-		m.abortBudget(c, admission)
-		return
+	if class == RouteGeneration {
+		// Before the abort: after it every observed admission is allowed, so a
+		// block could never be reported.
+		m.tracker.ObserveAdmission(keyIdentity.ProjectName, admission.Blocks, admission.Warnings)
+		if !admission.Allowed {
+			m.bridge.release(request.ID)
+			m.abortBudget(c, admission)
+			return
+		}
 	}
 
 	identity := requestIdentity(request, keyIdentity)
@@ -195,6 +212,9 @@ func (m *Middleware) admit(
 				identity.RequestID,
 				c.Request.Context().Err() != nil,
 			)
+			// Read inside the closure: a deferred call evaluates the status before
+			// c.Next runs, observing every generation as the writer's default 200.
+			m.tracker.ObserveGeneration(c.Writer.Status())
 		}()
 	} else {
 		c.Request = c.Request.WithContext(requestContext)
@@ -234,20 +254,34 @@ func (m *Middleware) recordRequest(
 ) (governance.Admission, bool) {
 	if class == RouteMetadata {
 		if err := m.requests.RecordMetadata(c.Request.Context(), request); err != nil {
+			m.observeRepositoryFailure(c)
 			log.Printf("llmgw: record metadata request (project=%d): unavailable", request.ProjectID)
 			abortSafe(c, http.StatusServiceUnavailable, "service_unavailable")
 			return governance.Admission{}, false
 		}
+		m.tracker.ObserveDatabase(true)
 		return governance.Admission{Allowed: true, Request: request}, true
 	}
 
 	admission, err := m.requests.AdmitGeneration(c.Request.Context(), request, requestedAt)
 	if err != nil {
+		m.observeRepositoryFailure(c)
 		log.Printf("llmgw: admit generation (project=%d): unavailable", request.ProjectID)
 		abortSafe(c, http.StatusServiceUnavailable, "service_unavailable")
 		return governance.Admission{}, false
 	}
+	m.tracker.ObserveDatabase(true)
 	return admission, true
+}
+
+// observeRepositoryFailure reports a repository error as a database outage only
+// while the caller is still there: a client that walked away aborts its own
+// query, which says nothing about PostgreSQL's health.
+func (m *Middleware) observeRepositoryFailure(c *gin.Context) {
+	if c.Request.Context().Err() != nil {
+		return
+	}
+	m.tracker.ObserveDatabase(false)
 }
 
 // requestIdentity converts authenticated and admitted values into SDK context identity.
@@ -307,6 +341,7 @@ func (m *Middleware) complete(c *gin.Context, identity RequestIdentity) {
 			completedAt,
 		)
 		if err == nil {
+			m.tracker.ObserveDatabase(true)
 			return
 		}
 		if attempt+1 < completionAttempts && waitCompletionRetry(ctx, attempt) {
@@ -314,6 +349,10 @@ func (m *Middleware) complete(c *gin.Context, identity RequestIdentity) {
 		}
 		break
 	}
+	// Reported once the retries are exhausted, and unconditionally: this work
+	// runs under context.WithoutCancel, so a deadline here is genuine slowness.
+	// Reporting per attempt would page for a blip the retry loop absorbs.
+	m.tracker.ObserveDatabase(false)
 	log.Printf(
 		"llmgw: complete request (project=%d request=%s): unavailable",
 		identity.ProjectID,

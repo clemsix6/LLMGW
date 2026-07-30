@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/clemsix6/LLMGW/internal/domain/governance"
+	"github.com/clemsix6/LLMGW/internal/domain/governance/alert"
 	"github.com/gin-gonic/gin"
 	sdkusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
@@ -18,7 +19,58 @@ import (
 // fixedTime pins the clock so admission and completion timestamps compare exactly.
 var fixedTime = time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 
-// runMiddleware drives one request through the governance middleware.
+// middlewareRequest is one drive through the governance middleware.
+//
+// It exists beside runMiddleware because the alert cases need a tracker and a
+// caller-owned request context, which would otherwise widen every call site.
+type middlewareRequest struct {
+	method   string          // method is the HTTP method to drive.
+	path     string          // path is the requested path.
+	headers  http.Header     // headers carry the project credential.
+	keys     *fakeKeys       // keys stands in for the project-key authenticator.
+	requests *fakeRequests   // requests stands in for the governance repository.
+	next     gin.HandlerFunc // next is the downstream handler, nil for a plain 200.
+	tracker  *alert.Tracker  // tracker observes admissions, generations and database health.
+	ctx      context.Context // ctx is the inbound request context, nil for the default.
+}
+
+// runMiddlewareRequest drives one configured request through the middleware.
+func runMiddlewareRequest(t *testing.T, spec middlewareRequest) *httptest.ResponseRecorder {
+	t.Helper()
+	bridge := fixedUsageBridge(t)
+	bridge.publishRecord = func(context.Context, sdkusage.Record) {}
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(spec.method, spec.path, nil)
+	request.Header = spec.headers.Clone()
+	if spec.ctx != nil {
+		request = request.WithContext(spec.ctx)
+	}
+	middleware := NewMiddleware(
+		spec.keys,
+		spec.requests,
+		func() time.Time { return fixedTime },
+		bridge,
+		spec.tracker,
+	)
+	engine := gin.New()
+	engine.Use(middleware.Handler())
+	engine.Any("/*path", orStatusOK(spec.next))
+	engine.ServeHTTP(recorder, request)
+	return recorder
+}
+
+// orStatusOK defaults an unset downstream handler to a bare 200.
+func orStatusOK(next gin.HandlerFunc) gin.HandlerFunc {
+	if next != nil {
+		return next
+	}
+	return func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	}
+}
+
+// runMiddleware drives one request with no alert tracker.
 func runMiddleware(
 	t *testing.T,
 	method string,
@@ -29,22 +81,14 @@ func runMiddleware(
 	next gin.HandlerFunc,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	bridge := fixedUsageBridge(t)
-	bridge.publishRecord = func(context.Context, sdkusage.Record) {}
-	gin.SetMode(gin.TestMode)
-	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(method, path, nil)
-	request.Header = headers.Clone()
-	engine := gin.New()
-	engine.Use(NewMiddleware(keys, requests, func() time.Time { return fixedTime }, bridge).Handler())
-	if next == nil {
-		next = func(c *gin.Context) {
-			c.Status(http.StatusOK)
-		}
-	}
-	engine.Any("/*path", next)
-	engine.ServeHTTP(recorder, request)
-	return recorder
+	return runMiddlewareRequest(t, middlewareRequest{
+		method:   method,
+		path:     path,
+		headers:  headers,
+		keys:     keys,
+		requests: requests,
+		next:     next,
+	})
 }
 
 // validHeaders carries a well-formed project credential.
