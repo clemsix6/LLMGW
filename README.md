@@ -46,8 +46,14 @@ openssl rand -base64 48
 ```
 
 Put that value in `LLMGW_KEY_PEPPER` and set `LLMGW_POSTGRES_DSN` in `.env`.
-The `.env.example` file has only these deployment inputs: `LLMGW_CONFIG`,
-`LLMGW_POSTGRES_DSN`, `LLMGW_KEY_PEPPER`, and `LLMGW_IMAGE_TAG`.
+The `.env.example` file has these deployment inputs: `LLMGW_CONFIG`,
+`LLMGW_POSTGRES_DSN`, `LLMGW_KEY_PEPPER`, `LLMGW_IMAGE_TAG`, and the optional
+`LLMGW_DISCORD_WEBHOOK_URL`. Leaving it empty or absent disables Discord
+alerting entirely; enabling it requires outbound HTTPS from the container to
+`discord.com`. When a webhook is configured and Discord is unreachable, `key
+create`, `key rotate`, `auth login`, and `auth import-legacy` take up to five
+seconds longer to exit — the command still succeeds, and the delivery failure
+is only a warning on stderr.
 
 Start the single service; migrations run during startup:
 
