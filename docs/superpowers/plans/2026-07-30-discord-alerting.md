@@ -133,6 +133,38 @@ Batch 4 landed at `a4ad476`. What later batches must know:
   (`test/integration/harness_test.go`) replace them.
   `buildServeService`'s signature was deliberately left untouched.
 
+## As-built after Batch 5 — composition root
+
+Batch 5 landed at `f336dbc`. What Batch 6 must know:
+
+- **Emitted field names, which Batch 6 must not contradict.** Created and
+  rotated key: `Project`, `Key`, `Public ID`, `Expires at` (omitted when nil).
+  Credential added: `Provider`, `Label`. Import: `Credentials`, `Imported`,
+  `Already present`, `Needs login`. Stopping: `Reason`, one of
+  `context_cancelled` / `service_returned` / `startup_failure`.
+- New in `internal/command/alerting.go`: `newServeAlerting`, `stopAlerting`,
+  `stoppingReason`, `credentialLabels`, `credentialLabelMap`,
+  `warnForeignWebhookHost`, `newOperatorNotifier`, `(*operatorNotifier).emit`,
+  the three field builders, and `alertDrainTimeout = 5s`.
+- `workers.go` took the struct option: `workerSchedule{reconcileEvery,
+  pruneEvery, sweepEvery, settleAfter, staleAfter}`, so
+  `startWorkersWithIntervals(ctx, repo, retention, tracker, schedule)` is five
+  parameters rather than eight. New `sweepProjectKeys`, `observeWorkerFailure`,
+  `sweepInterval` (1 h), `sweepKeyLookback` (30 d), `sweepKeyHorizon` (7 d).
+- **Worker failures are guarded by a live-context check.** Without it,
+  `cancelWorkers()` cancelling an in-flight reconcile would emit a critical
+  `database_unavailable` on **every clean shutdown** — and `runServeWith` blocks
+  on `<-workersDone` before the drain, so it would really be delivered.
+- The sweep reports `ObserveDatabase(false)` on error but not `(true)` on
+  success, unlike `reconcile` and `pruneCompleted`. Deliberate: spec §6.5 does
+  not list the sweep among the success-reporting sites, and `reconcile` runs
+  every 5 s and restores first. Do not copy the asymmetry elsewhere.
+- Operator notifiers resolve after `openStore` (which *is* the config load, and
+  mutates nothing) and before the create/rotate call; in `auth.go` they sit at
+  the top of each leaf, so `auth list` stays untouched.
+- Task 5.2 produced four test files. `test/integration/harness_test.go` still
+  passes `nil` to `NewMiddleware` — Batch 6's replacement point, compiling.
+
 **Process note for any future batch: `parallel` is unsafe when tasks are
 red-first under a whole-tree gate.** Batch 3's two parallel tasks each run
 `go vet ./...`, `go build ./...` and `go test ./internal/...`, so each would
@@ -343,7 +375,7 @@ func StartWorkers(
 | `internal/adapter/discord/delivery.go` | One HTTP delivery, retry policy, `Retry-After` |
 | `internal/config/discord.go` | Webhook URL resolution and validation (keeps `config.go` from growing) |
 | `internal/adapter/cliproxy/alert_plugin.go` | `alertUsagePlugin`: SDK usage record → `ObserveAttempt` |
-| `internal/command/alerting.go` | Notifier/tracker construction and `notifyOperatorEvent` |
+| `internal/command/alerting.go` | Notifier/tracker construction, `newOperatorNotifier` and its `emit` |
 | `test/integration/alerts_test.go` | Alert coverage against a stub webhook |
 
 Modified: `internal/config/config.go` (field + default only),
