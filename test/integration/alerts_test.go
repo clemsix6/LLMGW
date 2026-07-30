@@ -2,7 +2,6 @@ package integration
 
 import (
 	"bytes"
-	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -36,6 +35,7 @@ func TestUpstreamRateLimitAlertsTheCredential(t *testing.T) {
 	if status, _ := codexGeneration(t, created.Plaintext, rateLimitAlias); status != http.StatusOK {
 		t.Fatalf("rate-limited failover status = %d, want 200", status)
 	}
+	awaitUsageAttempts(t, created.Key.ProjectID, 2)
 
 	event, found := testHarness.Alerts.Wait(
 		mark,
@@ -126,8 +126,9 @@ func TestBlockedBudgetAlertsTheProject(t *testing.T) {
 //
 // max-retry-credentials is 2, so each request needs two scripted failures and
 // the client receives the upstream status. Awaiting the usage rows gates the
-// observation the alert rides on, and fails loudly if the SDK consumed a
-// different number of scripts rather than leaving the shared queue poisoned for
+// observation the alert rides on, and fails on the generation that consumed the
+// wrong number of scripts rather than several tests later. It cannot undo the
+// offset: StubUpstream has no drain, so an unconsumed response stays queued for
 // whichever test runs next.
 func driveFailingGenerations(t *testing.T, created governance.CreatedKey, count int) {
 	t.Helper()
@@ -228,10 +229,7 @@ func codexUsageResponse(model string) StubResponse {
 // codexGeneration performs one Codex generation for the given alias.
 func codexGeneration(t *testing.T, plaintext string, model string) (int, []byte) {
 	t.Helper()
-	body, err := json.Marshal(map[string]any{"model": model, "input": "fixture-prompt"})
-	if err != nil {
-		t.Fatal("marshal Codex request failed")
-	}
-	return gatewayRequest(t, http.MethodPost, "/v1/responses", bytes.NewReader(body),
+	body := `{"model":"` + model + `","input":"fixture-prompt"}`
+	return gatewayRequest(t, http.MethodPost, "/v1/responses", bytes.NewBufferString(body),
 		requestHeaders{authorization: "Bearer " + plaintext})
 }
