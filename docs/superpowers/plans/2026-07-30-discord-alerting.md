@@ -77,6 +77,41 @@ Batch 2 landed at `54bf9b5`. What later batches must know:
 - **`Notify` returning `true` means queued, not delivered.** See the accepted
   limitation added to spec §13.
 
+## As-built after Batch 3 — configuration, expiry query, worker port
+
+Batch 3 landed at `c6806c8`. What later batches must know:
+
+- **`ExpiringKeys` projects `created_at`.** The plan described the query without
+  it, which would have silently disabled spec §6.3's short-lifetime skip
+  forever: `alert/keys.go` computes the lifetime as
+  `ExpiresAt.Sub(CreatedAt)`, and a zero `CreatedAt` makes every key look two
+  thousand years old. Nothing downstream would have caught it — Batch 5 tests
+  the sweep against a stub and Batch 6 declares sweep events unreachable.
+- `(*Store).ExpiringKeys` has its own `scanKeyInfo`; `scanClientKey` is
+  untouched. New package-level test helpers now exist in
+  `internal/adapter/postgres`: `seedExpiryKey`, `ptrTime`, `expiryProject`,
+  `assertPublicIDs`, `assertKeyProjected`. **A later task adding its own
+  `ptrTime` there will collide.**
+- `internal/config/discord.go` exports only `Config.DiscordWebhookURL`;
+  validation is the unexported `validateWebhookURL`, the constant is
+  `defaultDiscordWebhookURLEnv`. The resolver trims its value before the empty
+  test, and short-circuits when the env *name* is empty — `applyLLMGWDefaults`
+  runs only through `Load`, so hand-built `config.Config` values such as
+  `validServeConfig()` never receive the default.
+- **`workers.go` carries no `var _ workerRepository = (*postgres.Store)(nil)`
+  assertion** and does not import the adapter — the guarantee comes from the
+  production call site in `serve.go`. Batch 5 must not expect one, and must not
+  reintroduce the import: it would undo the narrow port's purpose.
+- `StartWorkers` is still 3 parameters, and `internal/command/workers_test.go`
+  now exists with a double calling it at 3. Batch 5 adds the fourth and must
+  update that file — it will break visibly at compile time.
+
+**Process note for any future batch: `parallel` is unsafe when tasks are
+red-first under a whole-tree gate.** Batch 3's two parallel tasks each run
+`go vet ./...`, `go build ./...` and `go test ./internal/...`, so each would
+have seen the other's deliberately-failing tree with no way to tell it from its
+own failure. They were run sequentially.
+
 **Spec:** `docs/superpowers/specs/2026-07-30-discord-alerting-design.md`
 (approved at commit `851f9b0`). Where this plan and the spec disagree, the spec
 wins — report the divergence rather than silently following one.
