@@ -63,7 +63,7 @@ func credentialSummary(kind Kind, status int) string {
 	if kind == KindCredentialFailing && status <= 0 {
 		return "Provider credential failing with no upstream status (transport failure)"
 	}
-	return kind.title()
+	return kind.Title()
 }
 
 // credentialFields renders the operator-facing identity of one attempt,

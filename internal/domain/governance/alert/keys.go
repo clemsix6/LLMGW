@@ -42,7 +42,7 @@ func (t *Tracker) observeProjectKeyLocked(key governance.KeyInfo, now time.Time)
 		return
 	}
 
-	t.transitionLocked(entityKey, state, false, kind, kind.title(), keyFields(key))
+	t.transitionLocked(entityKey, state, false, kind, kind.Title(), keyFields(key))
 }
 
 // keyTransition classifies one swept key, reporting false for every key that

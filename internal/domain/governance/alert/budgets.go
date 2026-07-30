@@ -42,7 +42,7 @@ func (t *Tracker) observeBreachesLocked(
 
 		identity := budgetIdentity(project, breach.Limit)
 		t.entryLocked(key).fields = identity
-		t.transitionLocked(key, state, false, kind, kind.title(), breachFields(identity, breach.ResetAt))
+		t.transitionLocked(key, state, false, kind, kind.Title(), breachFields(identity, breach.ResetAt))
 	}
 }
 
@@ -59,7 +59,7 @@ func (t *Tracker) clearBudgetsLocked(project string, breached map[string]struct{
 			continue
 		}
 
-		t.transitionLocked(key, stateOK, true, KindBudgetCleared, KindBudgetCleared.title(), tracked.fields)
+		t.transitionLocked(key, stateOK, true, KindBudgetCleared, KindBudgetCleared.Title(), tracked.fields)
 	}
 }
 

@@ -137,8 +137,11 @@ func (k Kind) severity() Severity {
 	return SeverityInfo
 }
 
-// title returns the kind's human title, falling back to its identifier.
-func (k Kind) title() string {
+// Title returns the kind's human title, falling back to its identifier.
+//
+// It is exported because the Discord renderer needs it: a second copy of the
+// table on the adapter side would drift from this one.
+func (k Kind) Title() string {
 	if value, found := titleOf[k]; found {
 		return value
 	}

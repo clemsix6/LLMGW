@@ -91,7 +91,7 @@ func (t *Tracker) Emit(kind Kind, fields ...Field) {
 	if t.disabled() {
 		return
 	}
-	t.notifier.Notify(t.buildEvent(kind, kind.title(), fields))
+	t.notifier.Notify(t.buildEvent(kind, kind.Title(), fields))
 }
 
 // disabled reports whether the tracker can deliver anything at all.

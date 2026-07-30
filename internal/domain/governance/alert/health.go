@@ -27,7 +27,7 @@ func (t *Tracker) ObserveGeneration(status int) {
 		stateOK,
 		true,
 		KindGenerationRecovered,
-		KindGenerationRecovered.title(),
+		KindGenerationRecovered.Title(),
 		t.generationFieldsLocked(),
 	)
 }
@@ -46,7 +46,7 @@ func (t *Tracker) observeGenerationFailureLocked() {
 		stateFailing,
 		false,
 		KindGenerationFailures,
-		KindGenerationFailures.title(),
+		KindGenerationFailures.Title(),
 		t.generationFieldsLocked(),
 	)
 }
@@ -89,7 +89,7 @@ func (t *Tracker) observeDatabaseDown() {
 		stateDown,
 		false,
 		KindDatabaseUnavailable,
-		KindDatabaseUnavailable.title(),
+		KindDatabaseUnavailable.Title(),
 		nil,
 	)
 }
@@ -114,7 +114,7 @@ func (t *Tracker) observeDatabaseUp() {
 		stateUp,
 		true,
 		KindDatabaseRestored,
-		KindDatabaseRestored.title(),
+		KindDatabaseRestored.Title(),
 		nil,
 	)
 	if t.entryLocked(keyDatabase).delivered != stateDown {
