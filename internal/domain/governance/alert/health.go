@@ -75,12 +75,15 @@ func (t *Tracker) ObserveDatabase(healthy bool) {
 
 // observeDatabaseDown raises the pending flag before reporting the outage, so a
 // report that never reaches the notifier still leaves a restore owed.
+//
+// The flag is raised under the lock so a concurrent success can never observe
+// it while this outage is still unapplied, lower it, and strand the entity down
+// with the flag clear.
 func (t *Tracker) observeDatabaseDown() {
-	t.databaseDown.Store(true)
-
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	t.databaseDown.Store(true)
 	t.transitionLocked(
 		keyDatabase,
 		stateDown,
@@ -92,8 +95,12 @@ func (t *Tracker) observeDatabaseDown() {
 }
 
 // observeDatabaseUp is the hot path: it takes no lock while no outage is
-// pending, and lowers the flag only once the restore was actually delivered,
-// so a suppressed or dropped restore is retried on the next success.
+// pending, and lowers the flag only once no outage is owed any more.
+//
+// The flag means "a down state is still to be reconciled", so it survives a
+// restore the notifier suppressed or dropped — delivered is then still down and
+// the next success retries. It is lowered when the outage itself was never
+// delivered, because nothing is owed and the lock-free path can resume.
 func (t *Tracker) observeDatabaseUp() {
 	if !t.databaseDown.Load() {
 		return
@@ -110,7 +117,7 @@ func (t *Tracker) observeDatabaseUp() {
 		KindDatabaseRestored.title(),
 		nil,
 	)
-	if t.entryLocked(keyDatabase).delivered == stateUp {
+	if t.entryLocked(keyDatabase).delivered != stateDown {
 		t.databaseDown.Store(false)
 	}
 }
