@@ -106,6 +106,33 @@ Batch 3 landed at `c6806c8`. What later batches must know:
   now exists with a double calling it at 3. Batch 5 adds the fourth and must
   update that file — it will break visibly at compile time.
 
+## As-built after Batch 4 — observation points
+
+Batch 4 landed at `a4ad476`. What later batches must know:
+
+- `ObserveGeneration` lives **inside the barrier defer's body**, after
+  `publishBarrier`. The plan's "register a deferred `ObserveGeneration(...)`"
+  would have evaluated its argument at registration time, when gin's writer
+  still reads its default 200 — the counter would never have incremented and
+  `generation_failures` could never have fired.
+- `complete` reports database health **once after its retry loop**, not per
+  attempt; both branches of `recordRequest` report, metadata included.
+- `alertUsagePlugin` is a **value type**. `nonBarrierUsagePlugin` calls
+  `p.next.HandleUsage` unconditionally, so a typed-nil pointer would survive
+  `assembleService`'s nil check and then dereference.
+- Task 4.1 produced **two** test files — `alert_plugin_test.go` and
+  `middleware_alert_test.go` — split to respect the file-size rule, and thirteen
+  tests rather than the plan's five. `runMiddleware`'s signature is unchanged;
+  `helpers_test.go` gained `middlewareRequest` and `runMiddlewareRequest`, so
+  `middleware_security_test.go` needed no edit.
+- `middleware.go` is now 380 lines and `admit` 63 — both were already over
+  guidance before this batch, and the two observation points cannot be extracted
+  without moving a `defer` into a helper.
+- The two `nil` trackers carry `// alerting tracker: wired in a later batch` and
+  sit exactly where Batch 5 (`internal/command/serve.go`) and Batch 6
+  (`test/integration/harness_test.go`) replace them.
+  `buildServeService`'s signature was deliberately left untouched.
+
 **Process note for any future batch: `parallel` is unsafe when tasks are
 red-first under a whole-tree gate.** Batch 3's two parallel tasks each run
 `go vet ./...`, `go build ./...` and `go test ./internal/...`, so each would
@@ -995,6 +1022,36 @@ EOF
 
 # Batch 5 — Composition root and operator commands
 
+### Task 5.0: Close the `budget_cleared` wiring gap — dispatched alone, first
+
+**Files:**
+- Modify: `internal/adapter/cliproxy/middleware_alert_test.go`
+
+**Why this is here.** Batch 4's reviewer mutation-proved the gap: moving
+`ObserveAdmission` inside the `if !admission.Allowed` block — so only denials are
+ever observed — leaves the whole package green. The domain covers clearing in
+`alert/budgets_test.go`, but nothing covers the *middleware wiring* that feeds
+it, and Batch 6 cannot close it either: a project blocked on `calls` stays
+blocked for the suite's lifetime, so `budget_cleared` is unreachable from the
+integration suite. It belongs to Batch 4's scope but Batch 4 has landed, so it
+runs first here, before anything touches `internal/command`.
+
+- [ ] **Step 1:** Add one case driving a blocked generation admission and then
+  an allowed one on the same tracker, asserting `KindBudgetCleared` is emitted.
+- [ ] **Step 2:** Prove it fails on the mutation — move `ObserveAdmission`
+  inside the `!admission.Allowed` block, watch the new case go red, restore.
+- [ ] **Step 3:** Run `just fmt && just vet && just build && just test-unit`.
+- [ ] **Step 4: Commit**
+
+```bash
+git add internal/adapter/cliproxy
+git commit -F - <<'EOF'
+Cover the budget-cleared middleware wiring
+
+[+] Allowed-admission case pinning ObserveAdmission's call site
+EOF
+```
+
 ### Task 5.1: Serve wiring, sweep schedule and operator events — `same-agent`, **model: opus**
 
 **Files:**
@@ -1228,10 +1285,16 @@ A stub upstream forced to 429 produces one `credential_rate_limited` event
 naming the provider and the model; the same credential never appears twice. A
 project whose `calls` budget is exhausted produces one `budget_blocked` naming
 the project, dimension and window. Repeated upstream 5xx produce
-`generation_failures` on the third admitted generation and not before.
+`generation_failures` appears after repeated upstream 5xx. **Do not assert an
+ordinal** ("on the third generation and not before"): `ObserveGeneration`'s
+counter is a single global on the tracker and the suite runs one service for the
+whole package, so every generation `usage_test.go` and `budgets_test.go` drive
+moves it. Assert that the event appears.
+
 Assertions check kind, severity and the presence of identifying fields — never
-exact wording, and **never an order between two `budget_cleared` events** of the
-same project, which the engine does not define.
+exact wording, never a `description` on events whose summary equals their title
+(see "As-built after Batch 2"), and **never an order between two
+`budget_cleared` events** of the same project, which the engine does not define.
 
 - [ ] **Step 2:** Run `just test-integration`. Retry transient upstream errors
   with bounded backoff; never retry the gateway's own 402 or 503, which are the
