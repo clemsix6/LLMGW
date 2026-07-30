@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -78,13 +79,13 @@ func (w *Webhook) post(parent context.Context, body []byte, timeout time.Duratio
 
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, w.url, bytes.NewReader(body))
 	if err != nil {
-		return attemptOutcome{err: fmt.Errorf("build discord request:\n%w", err)}
+		return attemptOutcome{err: fmt.Errorf("build discord request:\n%w", withoutURL(err))}
 	}
 	request.Header.Set("Content-Type", "application/json")
 
 	response, err := w.client.Do(request)
 	if err != nil {
-		return attemptOutcome{retry: true, err: fmt.Errorf("post discord webhook:\n%w", err)}
+		return attemptOutcome{retry: true, err: fmt.Errorf("post discord webhook:\n%w", withoutURL(err))}
 	}
 	defer discardBody(response)
 
@@ -149,6 +150,21 @@ func payloadOf(event alert.Event) ([]byte, bool) {
 func discardBody(response *http.Response) {
 	_, _ = io.Copy(io.Discard, response.Body)
 	_ = response.Body.Close()
+}
+
+// withoutURL strips the request URL from a transport error. A Discord webhook
+// carries its token in the URL path, and *url.Error prints the whole URL, so
+// wrapping the raw error would write a bearer secret into the log on every
+// transport failure — which is exactly when the drop path runs.
+func withoutURL(err error) error {
+	var urlErr *url.Error
+	if !errors.As(err, &urlErr) {
+		return err
+	}
+	if urlErr.Err == nil {
+		return errors.New(urlErr.Op)
+	}
+	return fmt.Errorf("%s: %w", urlErr.Op, urlErr.Err)
 }
 
 // logDrop reports an event nobody will deliver. The log is the observation

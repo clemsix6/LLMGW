@@ -532,13 +532,17 @@ will appear in the Discord channel.
   severity, `Retry-After` honoured on 429, retry exhaustion drops rather than
   blocks, a saturated queue drops and reports false, `Close` drains newest-first
   with one attempt per event, a disabled notifier performs no request.
-- **Integration tests** — the real gateway against a stub webhook server. The
-  suite runs one service for the whole package, so the harness builds the
-  tracker with a zero anti-flap window and points the webhook at the stub; the
-  reachable events are the ones the request path produces: `credential_*` from a
-  stub upstream forced to 429, `budget_blocked` from a breached `calls` budget,
-  `generation_failures` from repeated upstream 5xx, and the absence of a second
-  message for a repeated identical failure. Startup, shutdown, sweep and
+- **Integration tests** — the real gateway against an in-process
+  `alert.Notifier` sink. The gateway, the request path and the events stay real;
+  only the HTTP hop is replaced, and it has its own exhaustive coverage above. A
+  real webhook would impose the production one-second delivery throttle between
+  every assertion, and nothing would own closing its server and goroutine at
+  teardown while the harness audits the log for leaked secrets. The suite runs
+  one service for the whole package, so the harness builds the tracker with a
+  zero anti-flap window; the reachable events are the ones the request path
+  produces: `credential_*` from a stub upstream forced to 429, `budget_blocked`
+  from a breached `calls` budget, `generation_failures` from repeated upstream
+  5xx, and the absence of a second message for a repeated identical failure. Startup, shutdown, sweep and
   operator events are not reachable through that harness and are covered by unit
   tests of their own call sites instead — stated here rather than promised and
   quietly dropped. Assertions are on shape and plausibility — kind, severity,
