@@ -232,7 +232,9 @@ func (h *Harness) startService(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("construct integration usage bridge:\n%w", err)
 	}
-	middleware := cliproxy.NewMiddleware(h.Keys, h.Store, time.Now, usageBridge)
+	middleware := cliproxy.NewMiddleware(h.Keys, h.Store, time.Now, usageBridge,
+		nil, // alerting tracker: wired in a later batch
+	)
 	usagePlugin := cliproxy.NewUsagePlugin(h.Store, usageBridge, postgres.IsTransientUsageError)
 	service, err := cliproxy.NewService(cfg, middleware, usagePlugin, h.Usage)
 	if err != nil {

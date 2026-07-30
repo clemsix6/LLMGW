@@ -178,7 +178,9 @@ func buildServeService(
 	if err != nil {
 		return nil, fmt.Errorf("construct usage bridge:\n%w", err)
 	}
-	middleware := cliproxy.NewMiddleware(keys, store.postgres, time.Now, bridge)
+	middleware := cliproxy.NewMiddleware(keys, store.postgres, time.Now, bridge,
+		nil, // alerting tracker: wired in a later batch
+	)
 	usage := cliproxy.NewUsagePlugin(
 		store.postgres,
 		bridge,
