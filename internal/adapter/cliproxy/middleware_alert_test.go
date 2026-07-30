@@ -59,6 +59,52 @@ func TestBlockedGenerationAdmissionIsObservedBeforeTheAbort(t *testing.T) {
 	}
 }
 
+// TestAllowedGenerationAdmissionClearsAPreviouslyBlockedBudget proves
+// ObserveAdmission runs on every generation admission, not only a denied one.
+// The call site sits before the `!admission.Allowed` abort so a later allowed
+// admission still reaches it; moved inside that guard, an allowed admission
+// would never be observed and budget_cleared could never fire.
+func TestAllowedGenerationAdmissionClearsAPreviouslyBlockedBudget(t *testing.T) {
+	tracker, sink := observingTracker()
+
+	blocked := runMiddlewareRequest(t, middlewareRequest{
+		method:   http.MethodPost,
+		path:     "/v1/messages",
+		headers:  validHeaders(),
+		keys:     validKeys(),
+		requests: blockingRepository(),
+		tracker:  tracker,
+	})
+	if blocked.Code != http.StatusPaymentRequired {
+		t.Fatalf("status = %d, want %d", blocked.Code, http.StatusPaymentRequired)
+	}
+	if sink.countOf(alert.KindBudgetBlocked) != 1 {
+		t.Fatalf("budget_blocked events = %d, want 1", sink.countOf(alert.KindBudgetBlocked))
+	}
+
+	allowed := runMiddlewareRequest(t, middlewareRequest{
+		method:   http.MethodPost,
+		path:     "/v1/messages",
+		headers:  validHeaders(),
+		keys:     validKeys(),
+		requests: &fakeRequests{},
+		tracker:  tracker,
+	})
+	if allowed.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", allowed.Code, http.StatusOK)
+	}
+
+	event, found := sink.first(alert.KindBudgetCleared)
+	if !found {
+		t.Fatalf("events = %d, want one budget_cleared", sink.total())
+	}
+	if fieldValue(event, "Project") != "project-a" ||
+		fieldValue(event, "Dimension") != string(governance.DimensionCalls) ||
+		fieldValue(event, "Window") != string(governance.WindowDay) {
+		t.Fatalf("observed fields = %#v", event.Fields)
+	}
+}
+
 // TestMetadataRequestsAreNeverObservedAsAdmissions proves the synthetic
 // always-allowed metadata admission never reaches the tracker: observing one
 // would clear a budget while generations are still being denied.
