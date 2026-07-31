@@ -29,5 +29,6 @@ routing:
 llmgw:
   postgres-dsn-env: LLMGW_POSTGRES_DSN
   key-pepper-env: LLMGW_KEY_PEPPER
+  discord-webhook-url-env: LLMGW_DISCORD_WEBHOOK_URL
   usage-retention-days: 35
   usage-outstanding-capacity: 64

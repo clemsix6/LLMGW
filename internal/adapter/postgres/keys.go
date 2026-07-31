@@ -14,6 +14,9 @@ import (
 // Confirm Store implements the project-key repository port.
 var _ governance.KeyRepository = (*Store)(nil)
 
+// Confirm Store implements the project-key expiry port.
+var _ governance.KeyExpiryReader = (*Store)(nil)
+
 // CreateKey creates its project if needed and inserts one project key atomically.
 func (s *Store) CreateKey(
 	ctx context.Context,
@@ -160,6 +163,38 @@ func (s *Store) RevokeKey(ctx context.Context, keyID int64, revokedAt time.Time)
 	return nil
 }
 
+// ExpiringKeys returns unrevoked keys expiring inside the inclusive window, earliest expiry first.
+func (s *Store) ExpiringKeys(ctx context.Context, from, to time.Time) ([]governance.KeyInfo, error) {
+	const query = `
+SELECT ck.id, ck.project_id, p.name, ck.name, ck.public_id,
+       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at
+FROM client_key ck
+JOIN project p ON p.id = ck.project_id
+WHERE ck.revoked_at IS NULL
+  AND ck.expires_at IS NOT NULL
+  AND ck.expires_at BETWEEN $1 AND $2
+ORDER BY ck.expires_at ASC`
+
+	rows, err := s.pool.Query(ctx, query, from, to)
+	if err != nil {
+		return nil, fmt.Errorf("query expiring project keys:\n%w", err)
+	}
+	defer rows.Close()
+
+	var keys []governance.KeyInfo
+	for rows.Next() {
+		key, err := scanKeyInfo(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan expiring project key:\n%w", err)
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate expiring project keys:\n%w", err)
+	}
+	return keys, nil
+}
+
 // ensureKeyProject returns the named project identifier, creating the project when absent.
 func ensureKeyProject(ctx context.Context, tx pgx.Tx, project string) (int64, error) {
 	const query = `
@@ -239,6 +274,16 @@ WHERE id = $1`
 		return fmt.Errorf("retire old project key:\n%w", err)
 	}
 	return nil
+}
+
+// scanKeyInfo scans the joined client-key projection without the secret digest.
+func scanKeyInfo(row pgx.Row) (governance.KeyInfo, error) {
+	var key governance.KeyInfo
+	err := row.Scan(
+		&key.ID, &key.ProjectID, &key.ProjectName, &key.Name, &key.PublicID,
+		&key.CreatedAt, &key.ExpiresAt, &key.RevokedAt, &key.LastUsedAt,
+	)
+	return key, err
 }
 
 // scanClientKey scans the common joined client-key projection.

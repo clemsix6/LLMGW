@@ -23,6 +23,9 @@ const (
 	// defaultKeyPepperEnv is the environment variable used for the key pepper when no override is configured.
 	defaultKeyPepperEnv = "LLMGW_KEY_PEPPER"
 
+	// defaultDiscordWebhookURLEnv is the environment variable used for the Discord webhook URL when no override is configured.
+	defaultDiscordWebhookURLEnv = "LLMGW_DISCORD_WEBHOOK_URL"
+
 	// defaultUsageRetentionDays limits persisted usage data to a little over one month.
 	defaultUsageRetentionDays = 35
 
@@ -44,9 +47,10 @@ const (
 
 // LLMGW holds the LLMGW-owned values in the shared YAML configuration.
 type LLMGW struct {
-	PostgresDSNEnv     string `yaml:"postgres-dsn-env"`     // PostgresDSNEnv names the environment variable that holds the PostgreSQL DSN.
-	KeyPepperEnv       string `yaml:"key-pepper-env"`       // KeyPepperEnv names the environment variable that holds the key pepper.
-	UsageRetentionDays int    `yaml:"usage-retention-days"` // UsageRetentionDays keeps usage history for this many whole days.
+	PostgresDSNEnv       string `yaml:"postgres-dsn-env"`        // PostgresDSNEnv names the environment variable that holds the PostgreSQL DSN.
+	KeyPepperEnv         string `yaml:"key-pepper-env"`          // KeyPepperEnv names the environment variable that holds the key pepper.
+	DiscordWebhookURLEnv string `yaml:"discord-webhook-url-env"` // DiscordWebhookURLEnv names the environment variable that holds the Discord webhook URL.
+	UsageRetentionDays   int    `yaml:"usage-retention-days"`    // UsageRetentionDays keeps usage history for this many whole days.
 	// UsageOutstandingCapacity bounds generation groups whose SDK usage barrier
 	// has not completed.
 	UsageOutstandingCapacity int `yaml:"usage-outstanding-capacity"`
@@ -245,6 +249,9 @@ func applyLLMGWDefaults(settings *LLMGW) {
 	}
 	if strings.TrimSpace(settings.KeyPepperEnv) == "" {
 		settings.KeyPepperEnv = defaultKeyPepperEnv
+	}
+	if strings.TrimSpace(settings.DiscordWebhookURLEnv) == "" {
+		settings.DiscordWebhookURLEnv = defaultDiscordWebhookURLEnv
 	}
 	if settings.UsageRetentionDays == 0 {
 		settings.UsageRetentionDays = defaultUsageRetentionDays

@@ -21,6 +21,12 @@ type KeyRepository interface {
 	RevokeKey(context.Context, int64, time.Time) error
 }
 
+// KeyExpiryReader reports keys whose expiry needs operator attention.
+type KeyExpiryReader interface {
+	// ExpiringKeys returns unrevoked keys expiring inside the window.
+	ExpiringKeys(ctx context.Context, from, to time.Time) ([]KeyInfo, error)
+}
+
 // RequestRepository persists request admission and completion.
 type RequestRepository interface {
 	// AdmitGeneration atomically evaluates budgets and records a generation request.
