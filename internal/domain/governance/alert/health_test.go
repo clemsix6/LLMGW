@@ -229,15 +229,33 @@ func TestExhaustedPoolNeverAnnouncesARecovery(t *testing.T) {
 	assertKinds(t, sink, alert.KindGenerationFailures)
 }
 
-// TestClientErrorsLeaveGenerationHealthAlone pins the exclusion: one project's
-// malformed requests must not mask an outage for every other project.
-func TestClientErrorsLeaveGenerationHealthAlone(t *testing.T) {
+// TestClientErrorNeverClearsAReportedOutage pins half the exclusion: one
+// project's malformed request must not post the all-clear while the gateway is
+// still failing everyone else. A fresh tracker cannot prove this — it stays
+// silent whatever the classification — so the outage is reported first.
+func TestClientErrorNeverClearsAReportedOutage(t *testing.T) {
 	sink := newNotifier()
 	tracker := newTracker(sink, newClock())
 
+	tracker.ObserveGeneration(500)
+	tracker.ObserveGeneration(500)
+	tracker.ObserveGeneration(500)
 	tracker.ObserveGeneration(400)
-	tracker.ObserveGeneration(404)
-	tracker.ObserveGeneration(422)
 
-	assertKinds(t, sink)
+	assertKinds(t, sink, alert.KindGenerationFailures)
+}
+
+// TestClientErrorNeverHidesAnOutage pins the other half: a client 4xx must not
+// reset the consecutive count, or one misbehaving project could keep an outage
+// permanently unreported.
+func TestClientErrorNeverHidesAnOutage(t *testing.T) {
+	sink := newNotifier()
+	tracker := newTracker(sink, newClock())
+
+	tracker.ObserveGeneration(500)
+	tracker.ObserveGeneration(500)
+	tracker.ObserveGeneration(404)
+	tracker.ObserveGeneration(500)
+
+	assertKinds(t, sink, alert.KindGenerationFailures)
 }

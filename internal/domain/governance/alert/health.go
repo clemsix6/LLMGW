@@ -15,8 +15,13 @@ func (t *Tracker) ObserveGeneration(status int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	failed, observed := generationOutcome(status)
+	if !observed {
+		return
+	}
+
 	t.generationLastStatus = status
-	if generationFailed(status) {
+	if failed {
 		t.observeGenerationFailureLocked()
 		return
 	}
@@ -32,14 +37,25 @@ func (t *Tracker) ObserveGeneration(status int) {
 	)
 }
 
-// generationFailed reports whether an admitted generation left its client
-// unserved. A 429 counts: the SDK answers an exhausted credential pool that way,
-// which is one of the outages this signal exists to catch, and treating it as a
-// success would both hide the outage and announce a recovery nobody is getting.
-// Every other 4xx is the client's own malformed request and stays neutral, so
-// one misbehaving project cannot mask an outage for everyone.
-func generationFailed(status int) bool {
-	return status >= 500 || status == 429
+// generationOutcome classifies one admitted generation: whether it says
+// anything about the gateway's health at all, and whether it left its client
+// unserved.
+//
+// A 429 counts as a failure: the SDK answers an exhausted credential pool that
+// way, which is one of the outages this signal exists to catch, and treating it
+// as a success would both hide the outage and announce a recovery nobody is
+// getting. Every other 4xx is the client's own malformed request and is not
+// observed at all — neither a failure nor a success — so one misbehaving
+// project can neither raise the alarm nor clear it for everyone else.
+func generationOutcome(status int) (failed bool, observed bool) {
+	switch {
+	case status >= 500, status == 429:
+		return true, true
+	case status >= 400:
+		return false, false
+	default:
+		return false, true
+	}
 }
 
 // observeGenerationFailureLocked counts one failing generation and transitions

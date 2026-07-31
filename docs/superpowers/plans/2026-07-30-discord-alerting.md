@@ -38,7 +38,13 @@ ways later batches build on:
   renders no status field, and it returns early on an empty credential ID.
 - `ObserveGeneration` keeps its counter and last status on `Tracker`; below
   three consecutive failures it does not transition at all.
-  `generation_recovered` carries `Consecutive failures: 0`.
+  `generation_recovered` carries `Consecutive failures: 0`. Its classifier is
+  `generationOutcome(status) (failed, observed bool)`: a 5xx or a 429 fails, any
+  other 4xx is not observed at all, everything else is a success.
+- `internal/adapter/discord/delivery.go` wraps every transport error through
+  `withoutURL`, which unwraps `*url.Error` down to its operation and cause. A
+  webhook's token is its URL path, so wrapping the raw error would log a bearer
+  secret on exactly the failures the drop log reports.
 - `ObserveProjectKeys` also skips an expiry further than 7 days away, which the
   plan's bare "otherwise → expiring" did not. The lifetime skip boundary is
   `<=`: exactly 7 days is skipped.

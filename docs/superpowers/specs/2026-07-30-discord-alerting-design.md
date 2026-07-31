@@ -536,7 +536,8 @@ will appear in the Discord channel.
   re-emitted on the next observation; a rejected `Notify` leaves the delivered
   state untouched so the next observation retries; the key state never moves
   backwards; client 4xx statuses leave credential state untouched;
-  `generation_failures` needs three consecutive 5xx.
+  `generation_failures` needs three consecutive 5xx or 429s, and a client 4xx
+  neither clears a reported outage nor resets the count towards one.
 - **Adapter unit tests, SDK side** — the observation contract of §5.1, which is
   not expressible in the domain because `ObserveDatabase` takes no context: a
   live-caller repository error marks the database down while a cancelled caller
