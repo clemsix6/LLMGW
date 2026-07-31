@@ -16,7 +16,7 @@ func (t *Tracker) ObserveGeneration(status int) {
 	defer t.mu.Unlock()
 
 	t.generationLastStatus = status
-	if status >= 500 {
+	if generationFailed(status) {
 		t.observeGenerationFailureLocked()
 		return
 	}
@@ -30,6 +30,16 @@ func (t *Tracker) ObserveGeneration(status int) {
 		KindGenerationRecovered.Title(),
 		t.generationFieldsLocked(),
 	)
+}
+
+// generationFailed reports whether an admitted generation left its client
+// unserved. A 429 counts: the SDK answers an exhausted credential pool that way,
+// which is one of the outages this signal exists to catch, and treating it as a
+// success would both hide the outage and announce a recovery nobody is getting.
+// Every other 4xx is the client's own malformed request and stays neutral, so
+// one misbehaving project cannot mask an outage for everyone.
+func generationFailed(status int) bool {
+	return status >= 500 || status == 429
 }
 
 // observeGenerationFailureLocked counts one failing generation and transitions

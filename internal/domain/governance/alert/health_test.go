@@ -197,3 +197,47 @@ func TestHealthSeverities(t *testing.T) {
 		t.Fatalf("database_unavailable severity = %q, want %q", got, alert.SeverityCritical)
 	}
 }
+
+// TestExhaustedPoolCountsAsAGenerationFailure pins the 429: the SDK answers an
+// exhausted credential pool that way, so treating it as a served generation
+// would hide the outage the critical signal exists to catch.
+func TestExhaustedPoolCountsAsAGenerationFailure(t *testing.T) {
+	sink := newNotifier()
+	tracker := newTracker(sink, newClock())
+
+	tracker.ObserveGeneration(429)
+	tracker.ObserveGeneration(429)
+
+	assertKinds(t, sink)
+
+	tracker.ObserveGeneration(429)
+
+	assertKinds(t, sink, alert.KindGenerationFailures)
+}
+
+// TestExhaustedPoolNeverAnnouncesARecovery pins the misleading all-clear: from a
+// reported outage, a 429 must not reset the state, because no client is served.
+func TestExhaustedPoolNeverAnnouncesARecovery(t *testing.T) {
+	sink := newNotifier()
+	tracker := newTracker(sink, newClock())
+
+	tracker.ObserveGeneration(500)
+	tracker.ObserveGeneration(500)
+	tracker.ObserveGeneration(500)
+	tracker.ObserveGeneration(429)
+
+	assertKinds(t, sink, alert.KindGenerationFailures)
+}
+
+// TestClientErrorsLeaveGenerationHealthAlone pins the exclusion: one project's
+// malformed requests must not mask an outage for every other project.
+func TestClientErrorsLeaveGenerationHealthAlone(t *testing.T) {
+	sink := newNotifier()
+	tracker := newTracker(sink, newClock())
+
+	tracker.ObserveGeneration(400)
+	tracker.ObserveGeneration(404)
+	tracker.ObserveGeneration(422)
+
+	assertKinds(t, sink)
+}

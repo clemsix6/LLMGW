@@ -176,8 +176,13 @@ emits one event.
 A minimum re-notification interval of **15 minutes** per (entity, kind)
 suppresses flapping. Two rules keep it from swallowing what matters:
 
-- an **escalation in severity always passes** the window, so a credential that
-  goes rate-limited (warning) then unauthorized (critical) delivers both;
+- an **escalation in severity passes the window from a degraded state**, so a
+  credential that goes rate-limited (warning) then unauthorized (critical)
+  delivers both. It does not apply from a healthy delivered state: allowing it
+  would disarm the window for the commonest flap shape — degraded, recovered,
+  degraded again within minutes — which is precisely the case the window exists
+  for. Nothing is lost either way, since suppression defers rather than
+  discards;
 - **suppression defers, it never discards.** The tracker records the last state
   it actually delivered, separately from the current state. On any later
   observation of that entity, if the current state still differs from the
@@ -236,8 +241,16 @@ would page the operator about credentials that are perfectly healthy.
 
 | Kind | Severity | Trigger |
 |---|---|---|
-| `generation_failures` | critical | three consecutive admitted generations complete with a 5xx |
-| `generation_recovered` | info | first admitted generation completing under 500 afterwards |
+| `generation_failures` | critical | three consecutive admitted generations complete with a 5xx or a 429 |
+| `generation_recovered` | info | first admitted generation served afterwards |
+
+A **429 counts as a failure**: the SDK answers an exhausted credential pool that
+way, which is one of the outages this signal exists to catch. Treating it as a
+served generation would both hide the outage and, from an already-reported
+outage, announce a recovery no client is getting. Every other 4xx is the
+client's own malformed request and leaves generation health untouched — the same
+exclusion §6.1 applies to credentials, and for the same reason: one misbehaving
+project must not be able to mask an outage for everyone else.
 
 Fields: consecutive failure count, last status.
 
