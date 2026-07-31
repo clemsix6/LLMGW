@@ -11,6 +11,7 @@ import (
 	"github.com/clemsix6/LLMGW/internal/adapter/cliproxy"
 	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
 	"github.com/clemsix6/LLMGW/internal/config"
+	"github.com/clemsix6/LLMGW/internal/domain/governance/alert"
 	"github.com/clemsix6/LLMGW/internal/domain/projectkey"
 )
 
@@ -35,8 +36,8 @@ type serveDependencies struct {
 	load           func(string, func(string) string) (config.Config, error)
 	prepareAuthDir func(string) error
 	openStore      func(context.Context, string) (*serveStore, error)
-	buildService   func(config.Config, *serveStore, []byte) (serveService, error)
-	startWorkers   func(context.Context, *serveStore, time.Duration) <-chan struct{}
+	buildService   func(config.Config, *serveStore, []byte, *alert.Tracker) (serveService, error)
+	startWorkers   func(context.Context, *serveStore, time.Duration, *alert.Tracker) <-chan struct{}
 	now            func() time.Time
 }
 
@@ -70,6 +71,14 @@ func runServeWith(
 	if err := deps.prepareAuthDir(cfg.Proxy.AuthDir); err != nil {
 		return fmt.Errorf("prepare serve auth directory:\n%w", err)
 	}
+	tracker, webhook, err := newServeAlerting(ctx, cfg, streams)
+	if err != nil {
+		return err
+	}
+	serviceStarted := false
+	// Registered before the lock-release defer, so LIFO runs it after: the last
+	// thing the operator sees then matches the process actually ending.
+	defer func() { stopAlerting(ctx, tracker, webhook, serviceStarted) }()
 	dsn, err := cfg.DatabaseDSN(streams.Getenv)
 	if err != nil {
 		return fmt.Errorf("resolve serve database:\n%w", err)
@@ -115,13 +124,15 @@ func runServeWith(
 	if _, err := store.recoverInterrupted(ctx, deps.now().UTC()); err != nil {
 		return fmt.Errorf("recover interrupted requests:\n%w", err)
 	}
-	service, err := deps.buildService(cfg, store, pepper)
+	service, err := deps.buildService(cfg, store, pepper, tracker)
 	if err != nil {
 		return err
 	}
+	serviceStarted = true
+	tracker.Emit(alert.KindGatewayStarted)
 
 	workerCtx, cancelWorkers := context.WithCancel(context.Background())
-	workersDone := deps.startWorkers(workerCtx, store, cfg.UsageRetention)
+	workersDone := deps.startWorkers(workerCtx, store, cfg.UsageRetention, tracker)
 	runErr := service.Run(ctx)
 	if runErr == nil && ctx.Err() == nil {
 		runErr = errors.New("embedded CLIProxyAPI service returned unexpectedly")
@@ -155,8 +166,13 @@ func productionServeDependencies() serveDependencies {
 			}, nil
 		},
 		buildService: buildServeService,
-		startWorkers: func(ctx context.Context, store *serveStore, retention time.Duration) <-chan struct{} {
-			return StartWorkers(ctx, store.postgres, retention)
+		startWorkers: func(
+			ctx context.Context,
+			store *serveStore,
+			retention time.Duration,
+			tracker *alert.Tracker,
+		) <-chan struct{} {
+			return StartWorkers(ctx, store.postgres, retention, tracker)
 		},
 		now: time.Now,
 	}
@@ -166,6 +182,7 @@ func buildServeService(
 	cfg config.Config,
 	store *serveStore,
 	pepper []byte,
+	tracker *alert.Tracker,
 ) (serveService, error) {
 	if store == nil || store.postgres == nil {
 		return nil, errors.New("construct serve service:\nPostgreSQL store is required")
@@ -178,13 +195,13 @@ func buildServeService(
 	if err != nil {
 		return nil, fmt.Errorf("construct usage bridge:\n%w", err)
 	}
-	middleware := cliproxy.NewMiddleware(keys, store.postgres, time.Now, bridge)
+	middleware := cliproxy.NewMiddleware(keys, store.postgres, time.Now, bridge, tracker)
 	usage := cliproxy.NewUsagePlugin(
 		store.postgres,
 		bridge,
 		postgres.IsTransientUsageError,
 	)
-	service, err := cliproxy.NewService(cfg, middleware, usage)
+	service, err := cliproxy.NewService(cfg, middleware, usage, cliproxy.NewAlertUsagePlugin(tracker))
 	if err != nil {
 		return nil, err
 	}
@@ -193,6 +210,7 @@ func buildServeService(
 	// restart a healthy one.
 	bridge.ReportPoisonWith(func() {
 		log.Print("llmgw: usage correlation is unrecoverable, stopping the service")
+		tracker.Emit(alert.KindUsagePoisoned)
 		go func() { _ = service.Close() }()
 	})
 	return service, nil

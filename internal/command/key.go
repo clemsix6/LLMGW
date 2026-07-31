@@ -12,6 +12,7 @@ import (
 	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
 	"github.com/clemsix6/LLMGW/internal/config"
 	"github.com/clemsix6/LLMGW/internal/domain/governance"
+	"github.com/clemsix6/LLMGW/internal/domain/governance/alert"
 	"github.com/clemsix6/LLMGW/internal/domain/projectkey"
 )
 
@@ -53,6 +54,12 @@ func runKeyCreate(ctx context.Context, args []string, streams Streams) error {
 		return err
 	}
 	defer store.Close()
+	// Resolved before the key exists, so a malformed webhook variable can never
+	// leave a created key behind.
+	notifier, err := newOperatorNotifier(cfg, streams)
+	if err != nil {
+		return err
+	}
 	service, err := keyService(cfg, store, streams)
 	if err != nil {
 		return err
@@ -69,6 +76,7 @@ func runKeyCreate(ctx context.Context, args []string, streams Streams) error {
 	if err := printCreatedKey(streams.Out, created); err != nil {
 		return fmt.Errorf("write created key:\n%w", err)
 	}
+	notifier.emit(alert.KindProjectKeyCreated, createdKeyFields(created)...)
 	return nil
 }
 
@@ -126,6 +134,12 @@ func runKeyRotate(ctx context.Context, args []string, streams Streams) error {
 		return err
 	}
 	defer store.Close()
+	// Resolved before the rotation, so a malformed webhook variable can never
+	// leave a half-rotated key behind.
+	notifier, err := newOperatorNotifier(cfg, streams)
+	if err != nil {
+		return err
+	}
 	if _, err := store.KeyByID(ctx, keyID); err != nil {
 		return fmt.Errorf("find key %d:\n%w", keyID, err)
 	}
@@ -140,6 +154,7 @@ func runKeyRotate(ctx context.Context, args []string, streams Streams) error {
 	if err := printCreatedKey(streams.Out, created); err != nil {
 		return fmt.Errorf("write rotated key:\n%w", err)
 	}
+	notifier.emit(alert.KindProjectKeyRotated, createdKeyFields(created)...)
 	return nil
 }
 

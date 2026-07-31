@@ -50,6 +50,7 @@ type Harness struct {
 	Keys       *projectkey.Service // Keys creates and authenticates project keys.
 	Upstream   *StubUpstream       // Upstream is the deterministic provider.
 	Usage      *usageCapture       // Usage observes SDK principal propagation.
+	Alerts     *AlertSink          // Alerts collects every event the request path produces.
 
 	cancel context.CancelFunc // cancel stops the single SDK service.
 	done   <-chan error       // done reports the SDK Run result.
@@ -94,6 +95,7 @@ func NewHarness() (_ *Harness, returnErr error) {
 		logs:    &lockedBuffer{},
 		secrets: make(map[string]struct{}),
 		Usage:   newUsageCapture(),
+		Alerts:  &AlertSink{},
 	}
 	defer func() {
 		if returnErr != nil {
@@ -232,9 +234,14 @@ func (h *Harness) startService(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("construct integration usage bridge:\n%w", err)
 	}
-	middleware := cliproxy.NewMiddleware(h.Keys, h.Store, time.Now, usageBridge)
+	// Built with a nil label map and a zero anti-flap window; newAlertTracker
+	// documents why both are what this suite needs.
+	tracker := newAlertTracker(h.Alerts)
+	middleware := cliproxy.NewMiddleware(h.Keys, h.Store, time.Now, usageBridge, tracker)
 	usagePlugin := cliproxy.NewUsagePlugin(h.Store, usageBridge, postgres.IsTransientUsageError)
-	service, err := cliproxy.NewService(cfg, middleware, usagePlugin, h.Usage)
+	service, err := cliproxy.NewService(
+		cfg, middleware, usagePlugin, h.Usage, cliproxy.NewAlertUsagePlugin(tracker),
+	)
 	if err != nil {
 		return fmt.Errorf("construct integration proxy:\n%w", err)
 	}

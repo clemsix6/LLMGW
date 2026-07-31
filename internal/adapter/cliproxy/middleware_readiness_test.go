@@ -17,7 +17,7 @@ func TestRequestsAreRefusedUntilTheSDKIsReady(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ready := make(chan struct{})
 	bridge := fixedUsageBridgeCapacity(t, 1)
-	middleware := NewMiddleware(&fakeKeys{}, &fakeRequests{}, time.Now, bridge)
+	middleware := NewMiddleware(&fakeKeys{}, &fakeRequests{}, time.Now, bridge, nil)
 	middleware.serveWhenReady(ready)
 
 	engine := gin.New()
