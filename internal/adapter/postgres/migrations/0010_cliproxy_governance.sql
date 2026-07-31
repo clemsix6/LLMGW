@@ -99,13 +99,33 @@ CREATE TABLE model_price (
     UNIQUE (provider, model_pattern, service_tier, effective_from)
 );
 
+-- The legacy schema constrained neither uniqueness nor values, and a failed
+-- import means the gateway never starts on that database again. Sanitize
+-- fail-closed instead of aborting: truncate fractional integer caps and clamp
+-- negatives to a full block (both more restrictive than the stored garbage),
+-- keep the most restrictive duplicate, and drop only caps no arithmetic can
+-- use (NaN, Infinity — excluded by max_value < 'Infinity', above which NaN sorts).
 INSERT INTO budget_limit (project_id, dimension, "window", max_value, action)
-SELECT project_id,
-       CASE dimension WHEN 'cost_usd' THEN 'cost' ELSE dimension END,
-       "window", max_value, action
-FROM legacy_budget_limit
-WHERE tag IS NULL;
+SELECT DISTINCT ON (project_id, dimension, "window", action)
+       project_id, dimension, "window", max_value, action
+FROM (
+    SELECT project_id,
+           CASE dimension WHEN 'cost_usd' THEN 'cost' ELSE dimension END AS dimension,
+           "window",
+           GREATEST(
+               0,
+               CASE WHEN dimension = 'cost_usd' THEN max_value ELSE trunc(max_value) END
+           ) AS max_value,
+           action
+    FROM legacy_budget_limit
+    WHERE tag IS NULL
+) sanitized
+WHERE max_value < 'Infinity'::double precision
+ORDER BY project_id, dimension, "window", action, max_value;
 
+-- An unpriceable legacy rate is dropped rather than imported: the model then
+-- records unknown_pricing, which blocks an active cost budget by design,
+-- instead of the whole migration failing its CHECK constraints.
 INSERT INTO model_price (
     provider, model_pattern, service_tier,
     input_per_million, output_per_million,
@@ -115,7 +135,11 @@ INSERT INTO model_price (
 SELECT '*', model, '*',
        input_usd_per_mtok, output_usd_per_mtok,
        NULL, NULL, '1970-01-01T00:00:00Z'::timestamptz
-FROM legacy_model_price;
+FROM legacy_model_price
+WHERE input_usd_per_mtok >= 0
+  AND input_usd_per_mtok < 'Infinity'::double precision
+  AND output_usd_per_mtok >= 0
+  AND output_usd_per_mtok < 'Infinity'::double precision;
 
 CREATE INDEX idx_client_key_public_id ON client_key(public_id);
 CREATE INDEX idx_budget_limit_project_id ON budget_limit(project_id);

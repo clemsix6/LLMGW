@@ -7,8 +7,10 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	sdkusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
@@ -24,17 +26,29 @@ const (
 	usagePayloadBytes        = 16 + usagePublicIDTextBytes
 	usageBarrierPayloadBytes = 17
 	usageCancelPayloadBytes  = 16
+	// usageParkTimeout bounds a canceled barrier's wait for its producer. The
+	// producer may never publish — a request canceled before it reached an
+	// executor, or while the SDK waited out a cooldown, publishes nothing — so
+	// an unbounded wait leaks the permit silently until capacity is gone.
+	usageParkTimeout = 10 * time.Second
+	// usageExpiredFloor is the minimum number of expired parked groups kept so
+	// a straggler record persists instead of reading as a compatibility failure.
+	usageExpiredFloor = 128
 )
 
 // UsageBridge authenticates immutable request correlation carried by the SDK
 // usage record. One process-local bridge must be shared by AccessProvider and
 // UsagePlugin.
 type UsageBridge struct {
-	key      [usageBridgeKeyBytes]byte
-	capacity int
+	key         [usageBridgeKeyBytes]byte
+	capacity    int
+	parkTimeout time.Duration // parkTimeout bounds how long a canceled barrier may wait for its producer.
 
 	mu            sync.Mutex
 	active        map[string]*usageGroupState
+	expired       map[string]struct{} // expired remembers parked groups released by timeout.
+	expiredOrder  []string            // expiredOrder evicts the oldest tombstone at the limit.
+	expiredLimit  int                 // expiredLimit bounds tombstone retention.
 	isPoisoned    bool
 	changed       chan struct{}
 	publishRecord func(context.Context, sdkusage.Record)
@@ -68,7 +82,10 @@ func NewUsageBridge(random io.Reader, capacity int) (*UsageBridge, error) {
 	}
 	bridge := &UsageBridge{
 		capacity:      capacity,
+		parkTimeout:   usageParkTimeout,
 		active:        make(map[string]*usageGroupState, capacity),
+		expired:       make(map[string]struct{}),
+		expiredLimit:  max(4*capacity, usageExpiredFloor),
 		changed:       make(chan struct{}),
 		publishRecord: sdkusage.PublishRecord,
 	}
@@ -160,7 +177,9 @@ func (b *UsageBridge) release(requestID string) bool {
 }
 
 // acceptRecord rejects an authenticated record after its bounded group was
-// released. This is a process-wide compatibility failure, not a new attempt.
+// released. This is a process-wide compatibility failure, not a new attempt —
+// except a straggler from an expired parked group, which is the producer the
+// parking window waited for: it persists normally, just without a permit.
 func (b *UsageBridge) acceptRecord(requestID string) bool {
 	if b == nil {
 		return false
@@ -171,6 +190,9 @@ func (b *UsageBridge) acceptRecord(requestID string) bool {
 		return false
 	}
 	if _, exists := b.active[requestID]; exists {
+		return true
+	}
+	if _, expired := b.expired[requestID]; expired {
 		return true
 	}
 	b.isPoisoned = true
@@ -206,6 +228,8 @@ func (b *UsageBridge) persisted(requestID string, failed bool) {
 }
 
 // completeBarrier applies normal FIFO completion or canceled-stream waiting.
+// Parking is bounded: the producer a canceled stream waits for may never
+// publish, so a timer returns the permit and leaves a tombstone instead.
 func (b *UsageBridge) completeBarrier(requestID string, canceled bool) bool {
 	if b == nil {
 		return false
@@ -224,7 +248,39 @@ func (b *UsageBridge) completeBarrier(requestID string, canceled bool) bool {
 	group.barrierSeen = true
 	group.canceled = true
 	b.signalLocked()
+	time.AfterFunc(b.parkTimeout, func() { b.expirePark(requestID) })
 	return false
+}
+
+// expirePark returns a parked canceled group's permit once its producer has
+// had the whole parking window to publish. The tombstone keeps a straggler
+// record persistable without reading it as a compatibility failure. A group
+// that completed, failed, or was never parked is left exactly as it is.
+func (b *UsageBridge) expirePark(requestID string) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	group, exists := b.active[requestID]
+	if !exists || !group.barrierSeen || !group.canceled || group.failed {
+		b.mu.Unlock()
+		return
+	}
+	delete(b.active, requestID)
+	b.rememberExpiredLocked(requestID)
+	b.signalLocked()
+	b.mu.Unlock()
+	log.Printf("llmgw: canceled generation produced no usage record (request=%s): permit returned", requestID)
+}
+
+// rememberExpiredLocked stores one tombstone, evicting the oldest at the limit.
+func (b *UsageBridge) rememberExpiredLocked(requestID string) {
+	if len(b.expiredOrder) >= b.expiredLimit {
+		delete(b.expired, b.expiredOrder[0])
+		b.expiredOrder = b.expiredOrder[1:]
+	}
+	b.expired[requestID] = struct{}{}
+	b.expiredOrder = append(b.expiredOrder, requestID)
 }
 
 func (b *UsageBridge) markCanceled(requestID string) {
