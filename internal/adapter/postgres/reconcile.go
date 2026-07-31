@@ -10,6 +10,9 @@ import (
 )
 
 // RecoverInterrupted completes requests left in flight by a terminated process.
+// Generations classify from their durable attempt set, like stale reconciliation:
+// usage that already landed is observed, and only a truly recordless generation
+// is unknown — unknown accounting blocks token and cost budgets by design.
 func (s *Store) RecoverInterrupted(ctx context.Context, recoveredAt time.Time) (int64, error) {
 	const query = `
 UPDATE request_event r
@@ -17,6 +20,8 @@ SET state = 'completed',
     completed_at = $1,
     accounting_state = CASE
         WHEN r.operation = 'metadata' THEN 'not_applicable'
+        WHEN EXISTS (SELECT 1 FROM usage_attempt a WHERE a.request_id = r.id)
+            THEN 'observed'
         ELSE 'accounting_unknown'
     END,
     accounting_resolved_at = NULL
