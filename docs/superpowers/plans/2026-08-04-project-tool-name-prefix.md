@@ -350,3 +350,14 @@ Then the green gate: the full integration suite, the domain and adapter tests,
 and `go vet`. This task commits only the fixes it surfaces.
 
 Assert on shape and plausibility, never on model text.
+
+**As built.** The non-200 scenario asserts something stronger than the plan
+asked for. The SDK translates upstream errors into its own client-facing
+envelope, so the literal upstream body is not guaranteed to survive and
+asserting it verbatim would test the SDK rather than this feature. The test
+instead drives the identical upstream failure with the flag off and on, and
+asserts the client-visible status and body are byte-identical — which is the
+property that matters. The failure is injected as `400 invalid_request_error`
+rather than a 5xx: the SDK classifies 5xx and 429 as retryable, which would
+trigger failover against the harness's two-account provider and consume a second
+scripted response, making the test non-deterministic.
