@@ -66,6 +66,16 @@ use for the flag.
 
 Verify the migration runner picks the file up the same way as `0013`.
 
+**As built.** All four `scanClientKey` queries already joined `project`, so only
+the projection changed — no join had to be added. `insertClientKey` and
+`ensureKeyProject` were reworked so `CreateKey` and `RotateKey` persist the
+project's real flag state rather than a hardcoded false. A second migration,
+`0015_restore_project_created_at.sql`, restores `project.created_at`: it had
+been dropped by `0012` as never selected, and `Projects()` needs it for
+`project list` (spec §6). Restoring it is append-only, following `0012`'s own
+convention. Existing projects show the migration's run time as their creation
+time — the original values were not retained anywhere to backfill from.
+
 ### Task 1.2 — Store methods for the operator surface
 
 In a new focused file beside `keys.go`, add exactly two methods, no more:
