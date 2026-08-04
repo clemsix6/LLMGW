@@ -3,6 +3,7 @@ package cliproxy
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -32,16 +33,21 @@ type middlewareRequest struct {
 	next     gin.HandlerFunc // next is the downstream handler, nil for a plain 200.
 	tracker  *alert.Tracker  // tracker observes admissions, generations and database health.
 	ctx      context.Context // ctx is the inbound request context, nil for the default.
+	body     io.Reader       // body is the request body, nil for none.
+	bridge   *UsageBridge    // bridge replaces the default one, to observe its capacity.
 }
 
 // runMiddlewareRequest drives one configured request through the middleware.
 func runMiddlewareRequest(t *testing.T, spec middlewareRequest) *httptest.ResponseRecorder {
 	t.Helper()
-	bridge := fixedUsageBridge(t)
+	bridge := spec.bridge
+	if bridge == nil {
+		bridge = fixedUsageBridge(t)
+	}
 	bridge.publishRecord = func(context.Context, sdkusage.Record) {}
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(spec.method, spec.path, nil)
+	request := httptest.NewRequest(spec.method, spec.path, spec.body)
 	request.Header = spec.headers.Clone()
 	if spec.ctx != nil {
 		request = request.WithContext(spec.ctx)

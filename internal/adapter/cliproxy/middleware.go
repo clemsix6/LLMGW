@@ -191,6 +191,9 @@ func (m *Middleware) admit(
 			return
 		}
 	}
+	if !m.rewriteToolNames(c, keyIdentity, request.ID, reserved) {
+		return
+	}
 
 	identity := requestIdentity(request, keyIdentity)
 	m.logWarnings(identity.ProjectID, admission.Warnings)
@@ -220,6 +223,11 @@ func (m *Middleware) admit(
 		c.Request = c.Request.WithContext(requestContext)
 	}
 	defer m.complete(c, identity)
+	if finalizeResponse := installToolPrefixWriter(c, keyIdentity); finalizeResponse != nil {
+		// Registered last so LIFO runs it first: the rewritten response must be
+		// fully on the wire before completion records the status it ended on.
+		defer finalizeResponse()
+	}
 	c.Next()
 }
 
