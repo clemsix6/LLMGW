@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,9 +34,10 @@ type StubChunk struct {
 type StubUpstream struct {
 	server *httptest.Server // server owns the local HTTP listener.
 
-	mu             sync.Mutex     // mu protects scripts and authorizations.
+	mu             sync.Mutex     // mu protects scripts, authorizations, and bodies.
 	scripts        []StubResponse // scripts contains responses in request order.
 	authorizations []string       // authorizations captures selected upstream credentials.
+	bodies         [][]byte       // bodies captures each upstream request payload, in arrival order.
 	statuses       []int          // statuses captures every scripted upstream status.
 	active         int            // active counts upstream handlers that have not returned.
 }
@@ -66,9 +68,17 @@ func (s *StubUpstream) Close() {
 	}
 }
 
-// serveHTTP captures account selection and returns the next fixture.
+// Bodies returns every request body the upstream captured, in arrival order.
+func (s *StubUpstream) Bodies() [][]byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([][]byte(nil), s.bodies...)
+}
+
+// serveHTTP captures account selection, the request body, and returns the next fixture.
 func (s *StubUpstream) serveHTTP(writer http.ResponseWriter, request *http.Request) {
-	response := s.nextResponse(request.Header.Get("Authorization"))
+	body, _ := io.ReadAll(request.Body)
+	response := s.nextResponse(request.Header.Get("Authorization"), body)
 	defer s.finishRequest()
 	if response.Started != nil {
 		response.Started <- struct{}{}
@@ -131,13 +141,14 @@ func (s *StubUpstream) closeConnection(writer http.ResponseWriter) {
 	}
 }
 
-// nextResponse atomically captures authorization and consumes one script.
-func (s *StubUpstream) nextResponse(authorization string) StubResponse {
+// nextResponse atomically captures authorization and body, then consumes one script.
+func (s *StubUpstream) nextResponse(authorization string, body []byte) StubResponse {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.active++
 	s.authorizations = append(s.authorizations, authorization)
+	s.bodies = append(s.bodies, body)
 	if len(s.scripts) == 0 {
 		return defaultStubResponse()
 	}
