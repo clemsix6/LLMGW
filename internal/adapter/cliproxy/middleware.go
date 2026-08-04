@@ -191,7 +191,7 @@ func (m *Middleware) admit(
 			return
 		}
 	}
-	if !m.rewriteToolNames(c, keyIdentity, request.ID, reserved) {
+	if !m.rewriteRequest(c, keyIdentity, request.ID, reserved) {
 		return
 	}
 

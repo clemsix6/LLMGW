@@ -174,7 +174,7 @@ func TestDeclaredOversizedBodyIsRefusedUnread(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(toolDeclaration))
 	c.Request.ContentLength = maxRewriteBody + 1
 
-	if rewriteRequestBody(c) {
+	if rewriteRequestBody(c, requestRewrite{prefixToolNames: true}) {
 		t.Fatal("rewriteRequestBody = true for a declared oversized body, want a refusal")
 	}
 	if recorder.Code != http.StatusRequestEntityTooLarge {

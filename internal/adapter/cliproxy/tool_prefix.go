@@ -9,7 +9,8 @@ import (
 
 const (
 	// messagesPath is the Anthropic generation route, the only one whose
-	// response can carry tool names back to the client.
+	// response can carry tool names back to the client and the only one an
+	// effort level has any effect on.
 	messagesPath = "/v1/messages"
 	// countTokensPath is the Anthropic token-count route. It carries the same
 	// payload shape as a generation, so counting a payload that differs from
@@ -17,17 +18,6 @@ const (
 	// with its bill.
 	countTokensPath = "/v1/messages/count_tokens"
 )
-
-// toolPrefixRequest reports whether this request's body carries the tool names
-// a flagged project namespaces. A project without the flag never matches, so
-// its path stays exactly today's: the body is not read and nothing is
-// allocated on its behalf.
-func toolPrefixRequest(identity governance.KeyIdentity, request *http.Request) bool {
-	if !identity.PrefixToolNames || request.Method != http.MethodPost {
-		return false
-	}
-	return request.URL.Path == messagesPath || request.URL.Path == countTokensPath
-}
 
 // toolPrefixResponse reports whether this request's response can carry
 // namespaced tool names back. count_tokens answers with a token count alone,
@@ -37,32 +27,6 @@ func toolPrefixResponse(identity governance.KeyIdentity, request *http.Request) 
 		return false
 	}
 	return request.URL.Path == messagesPath
-}
-
-// rewriteToolNames namespaces the tool names a flagged project declares,
-// before the SDK handler reads the body. It reports false when the request was
-// refused.
-//
-// The refusal releases the generation permit explicitly, the way the budget
-// abort a few lines above does: it returns before the barrier defer is
-// registered, so nothing else gives the permit back, and the bridge's finite
-// capacity would shrink for the life of the process.
-func (m *Middleware) rewriteToolNames(
-	c *gin.Context,
-	identity governance.KeyIdentity,
-	requestID string,
-	reserved bool,
-) bool {
-	if !toolPrefixRequest(identity, c.Request) {
-		return true
-	}
-	if rewriteRequestBody(c) {
-		return true
-	}
-	if reserved {
-		m.bridge.release(requestID)
-	}
-	return false
 }
 
 // installToolPrefixWriter wraps the response writer of a flagged project's
