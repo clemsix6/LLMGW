@@ -4,9 +4,10 @@ import "time"
 
 // Project identifies a governed project.
 type Project struct {
-	ID        int64     // ID is the database identifier.
-	Name      string    // Name is the unique project name.
-	CreatedAt time.Time // CreatedAt is the UTC creation time.
+	ID              int64     // ID is the database identifier.
+	Name            string    // Name is the unique project name.
+	CreatedAt       time.Time // CreatedAt is the UTC creation time.
+	PrefixToolNames bool      // PrefixToolNames reports whether outbound tool names are namespaced for this project.
 }
 
 // ClientKey is a persisted project-scoped client credential.
