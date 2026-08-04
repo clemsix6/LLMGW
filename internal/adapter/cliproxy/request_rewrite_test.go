@@ -111,6 +111,40 @@ func TestEffortInjectionReachesTheOutboundBody(t *testing.T) {
 	}
 }
 
+// TestDisabledThinkingKeepsTheClientBody proves the gateway itself declines to
+// inject into a request that turned thinking off, which on Opus 5 would be a
+// 400 above effort high.
+//
+// It is asserted here rather than end to end because the embedded SDK deletes
+// output_config.effort from any thinking-off request on its way upstream: the
+// integration assertion would hold with the gateway's own guard removed, and
+// only this one bites.
+func TestDisabledThinkingKeepsTheClientBody(t *testing.T) {
+	const disabledThinking = `{"model":"claude-opus-5","messages":[],"thinking":{"type":"disabled"}}`
+
+	keys := validKeys()
+	keys.identity.DefaultEffort = "max"
+
+	var seenBody string
+	runMiddlewareRequest(t, middlewareRequest{
+		method:   http.MethodPost,
+		path:     messagesPath,
+		headers:  validHeaders(),
+		keys:     keys,
+		requests: &fakeRequests{},
+		body:     strings.NewReader(disabledThinking),
+		next: func(c *gin.Context) {
+			payload, _ := io.ReadAll(c.Request.Body)
+			seenBody = string(payload)
+			c.Status(http.StatusOK)
+		},
+	})
+
+	if seenBody != disabledThinking {
+		t.Fatalf("handler read %s, want the client body unchanged", seenBody)
+	}
+}
+
 // TestOneBodyReadCarriesBothTransformations proves a project that enabled both
 // settings gets both applied to a single request, which is the property the
 // generalized rewrite exists for: two independent rewrites would each read the
