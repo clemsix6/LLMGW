@@ -50,7 +50,8 @@ func (s *Store) CreateKey(
 func (s *Store) KeyByPublicID(ctx context.Context, publicID string) (governance.ClientKey, error) {
 	const query = `
 SELECT ck.id, ck.project_id, p.name, ck.name, ck.public_id, ck.digest,
-       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names
+       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names,
+       COALESCE(p.default_effort, '')
 FROM client_key ck
 JOIN project p ON p.id = ck.project_id
 WHERE ck.public_id = $1`
@@ -69,7 +70,8 @@ WHERE ck.public_id = $1`
 func (s *Store) KeyByID(ctx context.Context, keyID int64) (governance.ClientKey, error) {
 	const query = `
 SELECT ck.id, ck.project_id, p.name, ck.name, ck.public_id, ck.digest,
-       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names
+       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names,
+       COALESCE(p.default_effort, '')
 FROM client_key ck
 JOIN project p ON p.id = ck.project_id
 WHERE ck.id = $1`
@@ -121,7 +123,8 @@ func (s *Store) RotateKey(
 func (s *Store) ListKeys(ctx context.Context, project string) ([]governance.ClientKey, error) {
 	const query = `
 SELECT ck.id, ck.project_id, p.name, ck.name, ck.public_id, ck.digest,
-       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names
+       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names,
+       COALESCE(p.default_effort, '')
 FROM client_key ck
 JOIN project p ON p.id = ck.project_id
 WHERE ($1 = '' OR p.name = $1)
@@ -247,7 +250,8 @@ RETURNING id, created_at, expires_at, revoked_at, last_used_at`
 func lockedClientKey(ctx context.Context, tx pgx.Tx, keyID int64) (governance.ClientKey, error) {
 	const query = `
 SELECT ck.id, ck.project_id, p.name, ck.name, ck.public_id, ck.digest,
-       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names
+       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names,
+       COALESCE(p.default_effort, '')
 FROM client_key ck
 JOIN project p ON p.id = ck.project_id
 WHERE ck.id = $1
@@ -299,6 +303,7 @@ func scanClientKey(row pgx.Row) (governance.ClientKey, error) {
 	err := row.Scan(
 		&key.ID, &key.ProjectID, &key.ProjectName, &key.Name, &key.PublicID, &key.Digest,
 		&key.CreatedAt, &key.ExpiresAt, &key.RevokedAt, &key.LastUsedAt, &key.PrefixToolNames,
+		&key.DefaultEffort,
 	)
 	return key, err
 }
