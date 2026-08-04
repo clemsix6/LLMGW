@@ -164,15 +164,25 @@ already produces `503` through the existing path.
 ## 10. Testing
 
 The integration suite drives the real gateway over HTTP against a stub upstream,
-which captures request bodies since the tool-prefix feature. The harness
-configures OpenAI-compatible and Codex providers, so a `POST /v1/messages` is
-translated before it reaches the stub and the effort arrives in the translated
-form the SDK produces for that provider. Assertions are stated in the shape the
-stub actually receives, and that the value survives translation is a property
-worth asserting rather than a compromise.
+which captures request bodies since the tool-prefix feature. The harness gains
+one Anthropic-format provider — a `claude-api-key` entry pointed at the stub —
+and these tests run against it. On that path the executor forwards the payload
+essentially untouched, so the assertion is on the literal `output_config.effort`
+the stub receives.
+
+The harness's existing providers cannot carry these assertions, and the reason
+is worth recording. A `POST /v1/messages` routed to the OpenAI-compatible
+provider is translated by a converter that reads `output_config.effort` only
+when a `thinking` object is present — and §4 rules out injecting one, so the
+effort would vanish before the stub. Giving the fixture its own `thinking` to
+make it visible breaks the opposite assertion instead, because that converter
+then writes a default `reasoning_effort` for the project that set none. The
+Codex provider writes a default `reasoning.effort` unconditionally. No single
+fixture makes all the cases below true, and the Anthropic-format path is the one
+the feature actually targets.
 
 - A project with no default sends a request naming no effort; the stub sees a
-  payload carrying no reasoning control.
+  payload carrying no `output_config.effort`.
 - A project with a default sends the same request; the stub sees the project's
   level.
 - A project with a default sends a request naming its own effort; the stub sees
