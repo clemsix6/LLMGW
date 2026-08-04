@@ -7,12 +7,65 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/clemsix6/LLMGW/internal/domain/governance"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
 
 // plainGeneration is one generation body naming neither an effort nor a tool.
 const plainGeneration = `{"model":"claude-opus-5","messages":[]}`
+
+// TestRequestRewriteRouteEligibility proves each transformation reaches its own
+// routes: the tool-name rewrite covers both Anthropic payload routes, while the
+// effort injection stops at generation. count_tokens is answered locally and
+// issues no upstream call, so the eligibility predicate is the only place that
+// exclusion has an observable.
+func TestRequestRewriteRouteEligibility(t *testing.T) {
+	identity := governance.KeyIdentity{PrefixToolNames: true, DefaultEffort: "high"}
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		wantPrefix bool
+		wantEffort string
+	}{
+		{
+			name:       "messages",
+			method:     http.MethodPost,
+			path:       messagesPath,
+			wantPrefix: true,
+			wantEffort: "high",
+		},
+		{
+			name:       "count_tokens",
+			method:     http.MethodPost,
+			path:       countTokensPath,
+			wantPrefix: true,
+			wantEffort: "",
+		},
+		{
+			name:   "models",
+			method: http.MethodGet,
+			path:   "/v1/models",
+		},
+		{
+			name:   "another posted route",
+			method: http.MethodPost,
+			path:   "/v1/chat/completions",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(test.method, test.path, nil)
+			got := resolveRequestRewrite(identity, request)
+			if got.prefixToolNames != test.wantPrefix || got.effortLevel != test.wantEffort {
+				t.Fatalf("resolveRequestRewrite = %+v, want prefix %v effort %q",
+					got, test.wantPrefix, test.wantEffort)
+			}
+		})
+	}
+}
 
 // TestEffortInjectionReachesTheOutboundBody proves the level the authenticated
 // project carries is what the SDK handler reads, and that a project without one

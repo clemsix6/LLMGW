@@ -122,6 +122,7 @@ func (h *Harness) startUpstreamAndFiles() error {
 	h.registerSecrets(
 		"upstream-account-a", "upstream-account-b",
 		"upstream-codex-account-a", "upstream-codex-account-b",
+		"upstream-claude-account-a",
 		"fixture-prompt", fixtureToolSecret, h.Upstream.URL(),
 		upstreamFailureSecret, upstreamHeaderSecret, "transient-failover-fixture",
 		"cooling-fixture", runtimeAccountSecret, "native-bypass", "attempted-management-key",
@@ -260,7 +261,11 @@ func (h *Harness) startService(ctx context.Context) error {
 	return nil
 }
 
-// configYAML renders the real SDK OpenAI-compatible provider configuration.
+// configYAML renders the real SDK provider configuration. The claude-api-key
+// entry is what makes an injected payload field observable: on that path the
+// executor forwards the Anthropic payload essentially untouched, where the
+// OpenAI-compatible and Codex providers translate it into a reasoning control
+// of their own (spec §10).
 func (h *Harness) configYAML(port int) []byte {
 	return []byte(fmt.Sprintf(`
 host: 127.0.0.1
@@ -329,12 +334,19 @@ codex-api-key:
       - name: codex-no-reset-model
         alias: cooldown-no-reset-model
         force-mapping: true
+claude-api-key:
+  - api-key: upstream-claude-account-a
+    base-url: %q
+    models:
+      - name: claude-upstream-model
+        alias: anthropic-test-model
+        force-mapping: true
 llmgw:
   postgres-dsn-env: TEST_POSTGRES_DSN
   key-pepper-env: TEST_KEY_PEPPER
   usage-retention-days: 35
   usage-outstanding-capacity: 2
-`, port, h.AuthDir, h.Upstream.URL()+"/v1", h.Upstream.URL(), h.Upstream.URL()))
+`, port, h.AuthDir, h.Upstream.URL()+"/v1", h.Upstream.URL(), h.Upstream.URL(), h.Upstream.URL()))
 }
 
 // waitReady polls the public health endpoint without credentials.
