@@ -35,6 +35,12 @@ func TestDefaultEffortOutboundInjection(t *testing.T) {
 		assertUpstreamEffort(t, "low")
 	})
 
+	// This case documents the end-to-end outcome; it does not prove the gateway
+	// produced it. The embedded SDK deletes output_config.effort from any
+	// thinking-off request on its way upstream, so the assertion below holds
+	// even with the gateway's own guard removed. What proves the guard is
+	// TestDisabledThinkingKeepsTheClientBody, in internal/adapter/cliproxy,
+	// which reads the body before the SDK touches it.
 	t.Run("disabled thinking is left alone", func(t *testing.T) {
 		created := testHarness.createKey(t, "effort-outbound-disabled")
 		testHarness.setDefaultEffort(t, created, "max")
