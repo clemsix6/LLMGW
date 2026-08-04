@@ -182,8 +182,12 @@ set it.
 
 The rewrite never fails a request that would otherwise succeed. Malformed JSON
 in either direction is forwarded unchanged. A missing or unexpected field is
-skipped rather than treated as an error. The only new rejection is the 32 MiB
-request ceiling.
+skipped rather than treated as an error.
+
+Two rejections are new, both only on the flagged path: the 32 MiB request
+ceiling, and a `400 invalid_request_error` when the body cannot be read at all —
+a client that walked away mid-upload. The second is not reported as a gateway
+fault: a client abandoning its own request says nothing about our health.
 
 If the project flag cannot be read, that is an authentication failure, and it
 already produces `503` through the existing path — no new case.
@@ -247,15 +251,21 @@ Assertions are on shape and plausibility, never on model text.
 - **Text is never rewritten.** A tool name written in prose — in a system
   prompt, in message text, or inside tool arguments — is left alone in both
   directions.
-- **The SDK's own OAuth tool remap stops matching.** On Claude OAuth
-  credentials, the SDK already normalises a set of lowercase tool names on their
-  way upstream and restores them on the way back — `bash`→`Bash`, `read`→`Read`,
-  `write`→`Write`, `edit`→`Edit`, `glob`→`Glob`, `grep`→`Grep`, `task`→`Task`,
-  `webfetch`→`WebFetch`. A prefixed `new_bash` no longer matches that map, so
-  enabling this feature turns that remap off for the names it covers. That is
-  consistent with the intent — a project asking for its own namespace does not
-  want its tools folded onto Claude Code's — but it is a behaviour change, and a
-  project relying on the SDK's remap should leave the flag off.
+- **The SDK's own OAuth tool remap stops matching, and it exists for a reason
+  worth knowing.** On Claude OAuth credentials the SDK normalises fourteen
+  lowercase tool names to Claude Code's casing on the way upstream and restores
+  them on the way back: `bash`, `read`, `write`, `edit`, `glob`, `grep`, `task`,
+  `webfetch`, `todowrite`, `question`, `skill`, `ls`, `todoread`,
+  `notebookedit`. The SDK states its purpose plainly — Anthropic fingerprints
+  tool names to detect third-party clients on OAuth traffic, and renaming to
+  official names avoids extra-usage billing.
+
+  A prefixed `new_bash` matches neither the map nor an official name. On an
+  OAuth credential this feature therefore works against that mechanism rather
+  than alongside it: it makes the request more distinguishable from Claude Code,
+  not less. On an API-key credential the mechanism does not apply and the
+  concern does not arise. A project on OAuth should weigh this before enabling
+  the flag.
 - **A configured non-streaming keep-alive is held back.** When
   `non-stream-keep-alive-interval` is set, the SDK emits newline frames during a
   long non-streamed generation to keep intermediaries from timing out. Buffered
@@ -266,6 +276,11 @@ Assertions are on shape and plausibility, never on model text.
 
 - Migration `0014` runs at startup like every other; it adds a column with a
   default and needs no backfill.
+- Migration `0015` restores `project.created_at`, which `0012` had dropped as
+  never selected and which `project list` needs again. The original values were
+  not retained anywhere, so every existing project reports the migration's run
+  time as its creation time. Nothing reads that column for governance — it is
+  operator-facing only.
 - No configuration change. The feature is inert until an operator runs
   `llmgw project tool-prefix <name> on`.
 - No new environment variable, secret, or service ordering constraint.
