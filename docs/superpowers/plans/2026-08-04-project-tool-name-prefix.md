@@ -265,6 +265,30 @@ an event split across several `Write` calls and one that arrives whole, a
 for the right route and flag combination; and a 32 MiB rejection returning the
 bridge to its prior capacity.
 
+**As built.** The wiring landed in three files rather than two: a
+`tool_prefix.go` holds the route predicates and the middleware's branch, because
+folding them into `middleware.go` would have crossed the 400-line rule.
+
+Six behaviours the plan did not predict, each found against the real SDK:
+
+- `Flush` also selects the mode. The SDK's Claude streaming handler has a path —
+  stream closed with no data — that sets SSE headers and flushes without ever
+  writing, and a wrapper ignoring `Flush` would never commit those headers.
+- `WriteHeader` is suppressed once a mode is locked in **all three** modes, not
+  only streaming, mirroring gin's own refusal to change a status after the first
+  write.
+- `Written()` and `Size()` report the wrapper's view, not the delegate's: the
+  SDK reads `Written()` before appending an error body, and a held buffered
+  response that read as unwritten would get an error appended on top of it.
+- Oversized bodies are refused on the declared `ContentLength` before a byte is
+  read, with `MaxBytesReader` catching the chunked case — spec §7 says refused
+  "rather than being buffered", which the reader alone would not honour.
+- A read error on an abandoned body aborts with `400 invalid_request_error`; the
+  plan required only that the alert tracker not be touched, which it is not.
+- Buffered leading whitespace from a configured keep-alive is trimmed for
+  parsing and re-emitted in front of the rewritten JSON, so tool names remain
+  the only bytes that change.
+
 ---
 
 ## Batch 4 — Operator surface and end-to-end proof
