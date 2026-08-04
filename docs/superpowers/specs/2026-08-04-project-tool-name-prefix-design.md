@@ -129,7 +129,8 @@ would replace Anthropic's specific validation error with a vaguer one from us.
 ## 8. Inbound Response Rewrite
 
 The middleware wraps `c.Writer` before calling the SDK handler. The wrapper
-chooses its mode when the status and headers are written:
+chooses its mode at the first write or flush — not when the status is set, which
+the SDK's handlers never do through the wrapper — and locks it once chosen:
 
 - **Streaming** (`Content-Type: text/event-stream`) — headers pass through
   immediately, because a client waiting on a stream must not be held back. The
@@ -164,10 +165,10 @@ past it the wrapper stops rewriting and forwards what it has.
 
 ## 9. Code Layout
 
-The rewrite itself is two pure functions over `[]byte` in the domain — one for
-the outbound payload, one for an inbound payload or event — with no HTTP, SQL,
-or SDK import, and no knowledge of where the bytes came from. They are the unit
-under test for every rewrite rule.
+The rewrite itself is three pure functions over `[]byte` in the domain — one for
+the outbound payload, one for a complete inbound response, one for a single
+stream event — with no HTTP, SQL, or SDK import, and no knowledge of where the
+bytes came from. They are the unit under test for every rewrite rule.
 
 The adapter holds the HTTP mechanics: reading and replacing the request body,
 the `gin.ResponseWriter` wrapper and its two modes, and the decision to engage
