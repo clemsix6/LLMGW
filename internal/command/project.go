@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
+	"github.com/clemsix6/LLMGW/internal/domain/effort"
 	"github.com/clemsix6/LLMGW/internal/domain/governance"
 )
 
@@ -23,6 +24,8 @@ func runProject(ctx context.Context, args []string, streams Streams) error {
 		return runProjectList(ctx, args[1:], streams)
 	case "tool-prefix":
 		return runProjectToolPrefix(ctx, args[1:], streams)
+	case "effort":
+		return runProjectEffort(ctx, args[1:], streams)
 	default:
 		return projectUsage(streams, fmt.Sprintf("unknown project command %q", args[0]))
 	}
@@ -89,6 +92,40 @@ func runProjectToolPrefix(ctx context.Context, args []string, streams Streams) e
 	return nil
 }
 
+// runProjectEffort sets or clears one existing project's default Anthropic
+// thinking effort. It fails with a clear message rather than creating the
+// project: implicit project creation stays a property of key create alone.
+func runProjectEffort(ctx context.Context, args []string, streams Streams) error {
+	flags := flag.NewFlagSet("project effort", flag.ContinueOnError)
+	flags.SetOutput(streams.Err)
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 2 {
+		return projectUsage(streams, "project effort requires NAME and low|medium|high|xhigh|max|none")
+	}
+	name := flags.Arg(0)
+	level, ok := effort.ParseLevel(flags.Arg(1))
+	if !ok {
+		return projectUsage(streams, "project effort level must be low, medium, high, xhigh, max, or none")
+	}
+	_, store, err := openStore(ctx, configPath(streams), streams)
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	if err := store.SetProjectDefaultEffort(ctx, name, level); err != nil {
+		if errors.Is(err, postgres.ErrProjectNotFound) {
+			return fmt.Errorf("project %q does not exist", name)
+		}
+		return fmt.Errorf("set project default effort:\n%w", err)
+	}
+	if _, err := fmt.Fprintf(streams.Out, "project\t%s\ndefault_effort\t%s\n", name, printedEffort(level)); err != nil {
+		return fmt.Errorf("write project default effort:\n%w", err)
+	}
+	return nil
+}
+
 // parseToolPrefixState parses the literal on|off argument into a boolean,
 // reporting whether the argument was recognized at all.
 func parseToolPrefixState(state string) (enabled bool, ok bool) {
@@ -106,14 +143,24 @@ func parseToolPrefixState(state string) (enabled bool, ok bool) {
 func printProject(output io.Writer, project governance.Project) error {
 	_, err := fmt.Fprintf(
 		output,
-		"name\t%s\ncreated_at\t%s\nprefix_tool_names\t%t\n",
+		"name\t%s\ncreated_at\t%s\nprefix_tool_names\t%t\ndefault_effort\t%s\n",
 		project.Name, project.CreatedAt.UTC().Format(time.RFC3339), project.PrefixToolNames,
+		printedEffort(project.DefaultEffort),
 	)
 	return err
 }
 
+// printedEffort renders a stored effort level for operator output, showing
+// "none" for the empty string that means the project carries no default.
+func printedEffort(level string) string {
+	if level == "" {
+		return "none"
+	}
+	return level
+}
+
 // projectUsage writes a short usage line for a leaf-parser error.
 func projectUsage(streams Streams, message string) error {
-	fmt.Fprintln(streams.Err, "usage: project {list|tool-prefix}")
+	fmt.Fprintln(streams.Err, "usage: project {list|tool-prefix|effort}")
 	return fmt.Errorf("%s", message)
 }

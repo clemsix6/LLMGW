@@ -32,6 +32,10 @@ func TestProjectUsageAndArguments(t *testing.T) {
 		{"tool-prefix missing name and state", []string{"tool-prefix"}},
 		{"tool-prefix invalid state", []string{"tool-prefix", "demo", "maybe"}},
 		{"tool-prefix extra argument", []string{"tool-prefix", "demo", "on", "extra"}},
+		{"effort missing level", []string{"effort", "demo"}},
+		{"effort missing name and level", []string{"effort"}},
+		{"effort invalid level", []string{"effort", "demo", "extreme"}},
+		{"effort extra argument", []string{"effort", "demo", "high", "extra"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -49,7 +53,7 @@ func TestProjectUsageAndArguments(t *testing.T) {
 			if strings.Contains(err.Error(), "load command configuration") {
 				t.Fatalf("validation reached the store: %v", err)
 			}
-			if !strings.Contains(errOut.String(), "usage: project {list|tool-prefix}") {
+			if !strings.Contains(errOut.String(), "usage: project {list|tool-prefix|effort}") {
 				t.Fatalf("usage output = %q, want the shared usage line", errOut.String())
 			}
 		})
@@ -77,6 +81,67 @@ func TestProjectListAndToolPrefix(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), `"does-not-exist" does not exist`) {
 		t.Fatalf("unknown project error = %v, want a does-not-exist message", err)
 	}
+}
+
+// TestProjectDefaultEffort proves the effort verb writes and reads back
+// through the real store: each accepted level round-trips, none clears the
+// column, a rejected level is refused before the store is touched, and an
+// unknown project is rejected rather than created.
+func TestProjectDefaultEffort(t *testing.T) {
+	factory := newCommandStreamsFactory(t)
+	seedProject(t, factory, "effort-demo")
+
+	assertProjectListEffort(t, factory, "effort-demo", "none")
+
+	for _, level := range []string{"low", "medium", "high", "xhigh", "max"} {
+		output := runProjectOrFail(t, factory, "effort", "effort-demo", level)
+		want := fmt.Sprintf("project\teffort-demo\ndefault_effort\t%s\n", level)
+		if output != want {
+			t.Fatalf("project effort %q output = %q, want %q", level, output, want)
+		}
+		assertProjectListEffort(t, factory, "effort-demo", level)
+	}
+
+	output := runProjectOrFail(t, factory, "effort", "effort-demo", "none")
+	want := "project\teffort-demo\ndefault_effort\tnone\n"
+	if output != want {
+		t.Fatalf("project effort none output = %q, want %q", output, want)
+	}
+	assertProjectListEffort(t, factory, "effort-demo", "none")
+
+	streams, _, _ := factory.streams()
+	err := runProject(context.Background(), []string{"effort", "effort-demo", "extreme"}, streams)
+	if err == nil || !strings.Contains(err.Error(), "level must be low, medium, high, xhigh, max, or none") {
+		t.Fatalf("rejected level error = %v, want a level-must-be message", err)
+	}
+
+	streams, _, _ = factory.streams()
+	err = runProject(context.Background(), []string{"effort", "does-not-exist", "high"}, streams)
+	if err == nil || !strings.Contains(err.Error(), `"does-not-exist" does not exist`) {
+		t.Fatalf("unknown project error = %v, want a does-not-exist message", err)
+	}
+}
+
+// assertProjectListEffort runs project list and checks one project's printed
+// default_effort field.
+func assertProjectListEffort(t *testing.T, factory commandStreamsFactory, name string, level string) {
+	t.Helper()
+	output := runProjectOrFail(t, factory, "list")
+	lines := strings.Split(output, "\n")
+	for i, line := range lines {
+		if line != "name\t"+name {
+			continue
+		}
+		if i+3 >= len(lines) {
+			t.Fatalf("project %q entry is truncated: %q", name, output)
+		}
+		want := "default_effort\t" + level
+		if lines[i+3] != want {
+			t.Fatalf("project %q default_effort = %q, want %q", name, lines[i+3], want)
+		}
+		return
+	}
+	t.Fatalf("project list = %q, missing entry for %q", output, name)
 }
 
 // commandStreamsFactory builds fresh Streams sharing one configuration and
