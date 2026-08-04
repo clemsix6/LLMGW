@@ -184,10 +184,11 @@ func keyInfo(key governance.ClientKey) governance.KeyInfo {
 // keyIdentity maps a persisted key to its request identity.
 func keyIdentity(key governance.ClientKey) governance.KeyIdentity {
 	return governance.KeyIdentity{
-		ProjectID:   key.ProjectID,
-		ProjectName: key.ProjectName,
-		ClientKeyID: key.ID,
-		KeyName:     key.Name,
-		PublicID:    key.PublicID,
+		ProjectID:       key.ProjectID,
+		ProjectName:     key.ProjectName,
+		ClientKeyID:     key.ID,
+		KeyName:         key.Name,
+		PublicID:        key.PublicID,
+		PrefixToolNames: key.PrefixToolNames,
 	}
 }

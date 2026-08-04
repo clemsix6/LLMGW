@@ -10,11 +10,12 @@ import (
 type commandHandler func(context.Context, []string, Streams) error
 
 var commandHandlers = map[string]commandHandler{
-	"serve":  runServe,
-	"auth":   runAuth,
-	"key":    runKey,
-	"budget": runBudget,
-	"usage":  runUsage,
+	"serve":   runServe,
+	"auth":    runAuth,
+	"key":     runKey,
+	"budget":  runBudget,
+	"usage":   runUsage,
+	"project": runProject,
 }
 
 // Run parses global flags and dispatches one local command. With no command it serves.
@@ -57,6 +58,7 @@ func writeRootUsage(streams Streams) {
        llmgw [--config PATH] key ...
        llmgw [--config PATH] budget ...
        llmgw [--config PATH] usage ...
+       llmgw [--config PATH] project ...
 
-commands: serve, auth, key, budget, usage`)
+commands: serve, auth, key, budget, usage, project`)
 }

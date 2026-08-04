@@ -32,11 +32,11 @@ func (s *Store) CreateKey(
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	projectID, err := ensureKeyProject(ctx, tx, project)
+	projectID, prefixToolNames, err := ensureKeyProject(ctx, tx, project)
 	if err != nil {
 		return governance.ClientKey{}, err
 	}
-	key, err := insertClientKey(ctx, tx, projectID, project, name, publicID, digest, expiresAt)
+	key, err := insertClientKey(ctx, tx, projectID, project, name, publicID, digest, expiresAt, prefixToolNames)
 	if err != nil {
 		return governance.ClientKey{}, err
 	}
@@ -50,7 +50,7 @@ func (s *Store) CreateKey(
 func (s *Store) KeyByPublicID(ctx context.Context, publicID string) (governance.ClientKey, error) {
 	const query = `
 SELECT ck.id, ck.project_id, p.name, ck.name, ck.public_id, ck.digest,
-       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at
+       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names
 FROM client_key ck
 JOIN project p ON p.id = ck.project_id
 WHERE ck.public_id = $1`
@@ -69,7 +69,7 @@ WHERE ck.public_id = $1`
 func (s *Store) KeyByID(ctx context.Context, keyID int64) (governance.ClientKey, error) {
 	const query = `
 SELECT ck.id, ck.project_id, p.name, ck.name, ck.public_id, ck.digest,
-       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at
+       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names
 FROM client_key ck
 JOIN project p ON p.id = ck.project_id
 WHERE ck.id = $1`
@@ -103,7 +103,7 @@ func (s *Store) RotateKey(
 		return governance.ClientKey{}, err
 	}
 	replacement, err := insertClientKey(
-		ctx, tx, old.ProjectID, old.ProjectName, old.Name, publicID, digest, nil,
+		ctx, tx, old.ProjectID, old.ProjectName, old.Name, publicID, digest, nil, old.PrefixToolNames,
 	)
 	if err != nil {
 		return governance.ClientKey{}, err
@@ -121,7 +121,7 @@ func (s *Store) RotateKey(
 func (s *Store) ListKeys(ctx context.Context, project string) ([]governance.ClientKey, error) {
 	const query = `
 SELECT ck.id, ck.project_id, p.name, ck.name, ck.public_id, ck.digest,
-       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at
+       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names
 FROM client_key ck
 JOIN project p ON p.id = ck.project_id
 WHERE ($1 = '' OR p.name = $1)
@@ -195,21 +195,25 @@ ORDER BY ck.expires_at ASC`
 	return keys, nil
 }
 
-// ensureKeyProject returns the named project identifier, creating the project when absent.
-func ensureKeyProject(ctx context.Context, tx pgx.Tx, project string) (int64, error) {
+// ensureKeyProject returns the named project's identifier and current tool-name-prefix
+// state, creating the project when absent.
+func ensureKeyProject(ctx context.Context, tx pgx.Tx, project string) (int64, bool, error) {
 	const query = `
 INSERT INTO project (name) VALUES ($1)
 ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-RETURNING id`
+RETURNING id, prefix_tool_names`
 
 	var projectID int64
-	if err := tx.QueryRow(ctx, query, project).Scan(&projectID); err != nil {
-		return 0, fmt.Errorf("ensure key project:\n%w", err)
+	var prefixToolNames bool
+	if err := tx.QueryRow(ctx, query, project).Scan(&projectID, &prefixToolNames); err != nil {
+		return 0, false, fmt.Errorf("ensure key project:\n%w", err)
 	}
-	return projectID, nil
+	return projectID, prefixToolNames, nil
 }
 
 // insertClientKey inserts one key and returns its complete persisted representation.
+// prefixToolNames carries the owning project's current state, resolved by the caller,
+// since this insert never reads the project row itself.
 func insertClientKey(
 	ctx context.Context,
 	tx pgx.Tx,
@@ -219,6 +223,7 @@ func insertClientKey(
 	publicID string,
 	digest []byte,
 	expiresAt *time.Time,
+	prefixToolNames bool,
 ) (governance.ClientKey, error) {
 	const query = `
 INSERT INTO client_key (project_id, name, public_id, digest, expires_at)
@@ -227,7 +232,7 @@ RETURNING id, created_at, expires_at, revoked_at, last_used_at`
 
 	key := governance.ClientKey{
 		ProjectID: projectID, ProjectName: project, Name: name, PublicID: publicID,
-		Digest: append([]byte(nil), digest...),
+		Digest: append([]byte(nil), digest...), PrefixToolNames: prefixToolNames,
 	}
 	err := tx.QueryRow(ctx, query, projectID, name, publicID, digest, expiresAt).Scan(
 		&key.ID, &key.CreatedAt, &key.ExpiresAt, &key.RevokedAt, &key.LastUsedAt,
@@ -242,7 +247,7 @@ RETURNING id, created_at, expires_at, revoked_at, last_used_at`
 func lockedClientKey(ctx context.Context, tx pgx.Tx, keyID int64) (governance.ClientKey, error) {
 	const query = `
 SELECT ck.id, ck.project_id, p.name, ck.name, ck.public_id, ck.digest,
-       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at
+       ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names
 FROM client_key ck
 JOIN project p ON p.id = ck.project_id
 WHERE ck.id = $1
@@ -286,12 +291,14 @@ func scanKeyInfo(row pgx.Row) (governance.KeyInfo, error) {
 	return key, err
 }
 
-// scanClientKey scans the common joined client-key projection.
+// scanClientKey scans the common joined client-key projection. Shared by KeyByPublicID,
+// KeyByID, ListKeys, and lockedClientKey: every one of those SELECTs must project the
+// same columns in the same order, or the destination count mismatches at runtime.
 func scanClientKey(row pgx.Row) (governance.ClientKey, error) {
 	var key governance.ClientKey
 	err := row.Scan(
 		&key.ID, &key.ProjectID, &key.ProjectName, &key.Name, &key.PublicID, &key.Digest,
-		&key.CreatedAt, &key.ExpiresAt, &key.RevokedAt, &key.LastUsedAt,
+		&key.CreatedAt, &key.ExpiresAt, &key.RevokedAt, &key.LastUsedAt, &key.PrefixToolNames,
 	)
 	return key, err
 }
