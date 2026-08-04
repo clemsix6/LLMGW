@@ -18,7 +18,7 @@ var ErrProjectNotFound = errors.New("project not found")
 // Projects returns every project ordered by name.
 func (s *Store) Projects(ctx context.Context) ([]governance.Project, error) {
 	const query = `
-SELECT id, name, created_at, prefix_tool_names
+SELECT id, name, created_at, prefix_tool_names, COALESCE(default_effort, '')
 FROM project
 ORDER BY name`
 
@@ -58,9 +58,29 @@ func (s *Store) SetProjectToolPrefix(ctx context.Context, name string, enabled b
 	return nil
 }
 
+// SetProjectDefaultEffort sets or clears an already-created project's default
+// Anthropic thinking effort. An empty level writes NULL, which is what the
+// injection reads as "no default". It fails with ErrProjectNotFound rather
+// than creating the project, so the setting can never be the thing that
+// brings a project into being.
+func (s *Store) SetProjectDefaultEffort(ctx context.Context, name string, level string) error {
+	const query = `UPDATE project SET default_effort = NULLIF($2, '') WHERE name = $1`
+
+	tag, err := s.pool.Exec(ctx, query, name, level)
+	if err != nil {
+		return fmt.Errorf("set default effort for project %q:\n%w", name, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("set default effort for project %q:\n%w", name, ErrProjectNotFound)
+	}
+	return nil
+}
+
 // scanProject scans one row of the project projection.
 func scanProject(row pgx.Row) (governance.Project, error) {
 	var project governance.Project
-	err := row.Scan(&project.ID, &project.Name, &project.CreatedAt, &project.PrefixToolNames)
+	err := row.Scan(
+		&project.ID, &project.Name, &project.CreatedAt, &project.PrefixToolNames, &project.DefaultEffort,
+	)
 	return project, err
 }
