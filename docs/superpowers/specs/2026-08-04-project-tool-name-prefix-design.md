@@ -190,23 +190,40 @@ already produces `503` through the existing path — no new case.
 
 ## 11. Testing
 
-The integration suite drives the real gateway over HTTP against a stub upstream,
-which is what makes the assertions here possible: the stub records exactly what
-it received.
+The integration suite drives the real gateway over HTTP against a stub upstream.
+Two properties of that harness shape what can be asserted, and both cost work
+this feature must pay for:
+
+- The stub does not record request bodies today; it captures the authorization
+  header and the status. Body capture is added as part of this feature.
+- The harness configures OpenAI-compatible and Codex providers, not an
+  Anthropic-format one. A `POST /v1/messages` is therefore translated before it
+  reaches the stub, and arrives as `tools[].function.name`,
+  `tool_choice.function.name`, and `messages[].tool_calls[].function.name`.
+
+Assertions are stated in the format the stub actually receives. That the names
+survive translation is a property worth asserting rather than a compromise: it
+is what proves the rewrite is independent of the upstream.
 
 - A project with the flag off sends a request naming `search_web`; the stub sees
   `search_web`.
 - A project with the flag on sends the same request; the stub sees
-  `new_search_web` in the declarations, in `tool_choice`, and in the replayed
-  history.
-- The stub returns a `tool_use` block naming `new_search_web`; the client sees
+  `new_search_web` in the declarations, in the forced choice, and in the
+  replayed history.
+- The stub returns a tool call naming `new_search_web`; the client sees
   `search_web`, both non-streamed and streamed.
-- The stub returns a streamed `tool_use` split across several writes; the client
-  still sees one coherent `content_block_start` naming `search_web`.
-- The stub returns a `tool_use` naming something without the prefix; the client
+- The stub streams a tool call split across several writes; the client still
+  sees one coherent `content_block_start` naming `search_web`.
+- The stub returns a tool call naming something without the prefix; the client
   sees it unchanged.
-- A `count_tokens` request from a flagged project reaches the stub prefixed.
+- A `count_tokens` request from a flagged project reports a larger
+  `input_tokens` than the same request from an unflagged one. Token counting is
+  answered locally by the executor and issues no upstream call, so the count
+  itself is the only observable proof that the rewrite reached the payload.
 - A non-200 upstream response reaches the client unchanged.
+- A request rejected at 32 MiB returns the bridge to its prior capacity: a
+  generation permit is reserved before the rewrite runs, and a rejection that
+  leaked it would degrade capacity permanently.
 
 Domain tests cover the rewrite functions directly: each of the three outbound
 locations, the inverse on both response shapes, malformed JSON, absent fields,
@@ -230,6 +247,20 @@ Assertions are on shape and plausibility, never on model text.
 - **Text is never rewritten.** A tool name written in prose — in a system
   prompt, in message text, or inside tool arguments — is left alone in both
   directions.
+- **The SDK's own OAuth tool remap stops matching.** On Claude OAuth
+  credentials, the SDK already normalises a set of lowercase tool names on their
+  way upstream and restores them on the way back — `bash`→`Bash`, `read`→`Read`,
+  `write`→`Write`, `edit`→`Edit`, `glob`→`Glob`, `grep`→`Grep`, `task`→`Task`,
+  `webfetch`→`WebFetch`. A prefixed `new_bash` no longer matches that map, so
+  enabling this feature turns that remap off for the names it covers. That is
+  consistent with the intent — a project asking for its own namespace does not
+  want its tools folded onto Claude Code's — but it is a behaviour change, and a
+  project relying on the SDK's remap should leave the flag off.
+- **A configured non-streaming keep-alive is held back.** When
+  `non-stream-keep-alive-interval` is set, the SDK emits newline frames during a
+  long non-streamed generation to keep intermediaries from timing out. Buffered
+  mode holds them until the response completes. The SDK default is 0, so this
+  affects only a deployment that turned it on.
 
 ## 13. Deployment Notes
 
