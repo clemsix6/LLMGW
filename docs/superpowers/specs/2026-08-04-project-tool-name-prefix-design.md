@@ -45,6 +45,8 @@ gateway keeps every client unchanged.
   format carries the rewrite.
 - No configurable prefix. `new_` is a constant; a project turns it on or off.
 - No exemption list. Every tool a project declares is renamed (see §12).
+  **Superseded:** tools Anthropic defines are now left alone, discriminated by
+  the presence of a `type` field rather than by any list of names. See §13.
 - No rewriting of tool names that appear in free-form text — system prompts,
   message text, or tool arguments are never inspected.
 
@@ -238,11 +240,11 @@ Assertions are on shape and plausibility, never on model text.
 
 ## 12. Known Limitations
 
-- **Anthropic server tools break.** A server tool (`web_search_20250305`,
-  `code_execution`, `computer`, `bash`, `text_editor`) declared by a flagged
-  project is prefixed like any other, and Anthropic will not recognise the
-  renamed tool. This is the accepted cost of renaming every tool without an
-  exemption list. A project using server tools must leave the flag off.
+- ~~**Anthropic server tools break.**~~ **Fixed — see §13.** A tool Anthropic
+  defines is no longer renamed, so a flagged project can declare one and have it
+  work. What this limitation described was real: a flagged project declaring
+  `{"type": "web_search_20260209", "name": "web_search"}` was refused with
+  `tools.0.web_search_20260209.name: Input should be 'web_search'`.
 - **Errors leak the prefix.** An Anthropic error message that quotes a tool name
   reaches the client with `new_` still attached, because error bodies are
   forwarded unchanged.
@@ -273,7 +275,38 @@ Assertions are on shape and plausibility, never on model text.
   mode holds them until the response completes. The SDK default is 0, so this
   affects only a deployment that turned it on.
 
-## 13. Deployment Notes
+## 13. Anthropic-Defined Tools Are Exempt (added 2026-08-05)
+
+A tool Anthropic defines is never renamed. The discriminator is the `type`
+field, not the name: an Anthropic-defined tool declares
+`{"type": "web_search_20260209", "name": "web_search"}`, while a project's own
+tool declares a schema and carries no `type`, or carries `type: "custom"`. A
+name is therefore prefixed when its declaration has no `type`, or when that
+`type` is `custom`.
+
+The name was rejected as the discriminator because a project legitimately
+declares its own tool called `bash`, which must still be namespaced, while
+Anthropic's `bash` (`type: bash_20250124`) must not. A list of exempt names
+cannot tell those two apart; the `type` can, and needs no maintenance as
+Anthropic adds tools.
+
+The exemption cannot stop at the declarations. `tool_choice.name` and the
+`tool_use` names replayed in history carry a name and no `type`, so the exempt
+names are collected from `tools[]` first — read before any rewrite — and honoured
+at all three locations. A request whose declarations name `bash` while its
+history names `new_bash` is internally inconsistent and Anthropic rejects it.
+
+Two consequences are accepted rather than solved. A name that is declared twice,
+once by the project and once by Anthropic, resolves to exempt wherever only the
+name is available: prefixing a name Anthropic owns fails with no recovery, while
+leaving a project name alone merely forgoes the namespace. And a tool named only
+in replayed history, never declared in `tools[]`, is still prefixed, because the
+exemption can only be derived from the declarations.
+
+The response path needs no change: removal strips a leading `new_` and returns
+anything else untouched, and no Anthropic tool name begins with `new_`.
+
+## 14. Deployment Notes
 
 - Migration `0014` runs at startup like every other; it adds a column with a
   default and needs no backfill.

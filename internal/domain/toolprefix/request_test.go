@@ -174,6 +174,114 @@ func assertHistoryNames(t *testing.T, payload []byte, want map[string]string) {
 	}
 }
 
+// TestPrefixRequestLeavesAnthropicToolsAlone proves a tool Anthropic defines
+// keeps the exact name upstream requires, while a project declaration in the
+// same payload is still namespaced.
+func TestPrefixRequestLeavesAnthropicToolsAlone(t *testing.T) {
+	payload := []byte(`{"tools":[
+		{"type":"web_search_20260209","name":"web_search"},
+		{"type":"bash_20250124","name":"bash"},
+		{"type":"text_editor_20250728","name":"str_replace_based_edit_tool"},
+		{"name":"search_web","description":"search","input_schema":{"type":"object"}}
+	]}`)
+	got := PrefixRequest(payload)
+
+	assertToolNames(t, got, []string{
+		"web_search",
+		"bash",
+		"str_replace_based_edit_tool",
+		"new_search_web",
+	})
+}
+
+// TestPrefixRequestPrefixesCustomTypedTool proves the explicit "custom" type,
+// which the Anthropic Messages API accepts on a project's own declaration, is
+// renamed exactly like the type-less shape.
+func TestPrefixRequestPrefixesCustomTypedTool(t *testing.T) {
+	payload := []byte(`{"tools":[
+		{"type":"custom","name":"search_web","input_schema":{"type":"object"}}
+	]}`)
+	got := PrefixRequest(payload)
+
+	assertToolNames(t, got, []string{"new_search_web"})
+}
+
+// TestPrefixRequestSameNameDiscriminatedByType proves the discriminating case:
+// a project tool named bash and Anthropic's own bash declared in one payload
+// are told apart by their type, not by their shared name.
+func TestPrefixRequestSameNameDiscriminatedByType(t *testing.T) {
+	payload := []byte(`{"tools":[
+		{"name":"bash","description":"the project's own bash","input_schema":{"type":"object"}},
+		{"type":"bash_20250124","name":"bash"}
+	]}`)
+	got := PrefixRequest(payload)
+
+	assertToolNames(t, got, []string{"new_bash", "bash"})
+}
+
+// TestPrefixRequestToolChoiceFollowsDeclaration proves a forced choice is
+// rewritten to match the declaration it names — prefixed for a project tool,
+// left alone for an Anthropic-defined one — so the two never disagree.
+func TestPrefixRequestToolChoiceFollowsDeclaration(t *testing.T) {
+	for _, testCase := range exemptionCases() {
+		t.Run(testCase.name, func(t *testing.T) {
+			payload := []byte(fmt.Sprintf(
+				`{"tools":[%s],"tool_choice":{"type":"tool","name":"bash"}}`,
+				testCase.declaration,
+			))
+			got := PrefixRequest(payload)
+			if v := gjson.GetBytes(got, "tool_choice.name").String(); v != testCase.want {
+				t.Fatalf("tool_choice.name = %q, want %q", v, testCase.want)
+			}
+		})
+	}
+}
+
+// TestPrefixRequestHistoryFollowsDeclaration proves a replayed tool_use block
+// is rewritten to match the declaration it names, which is what keeps a
+// request internally consistent for Anthropic.
+func TestPrefixRequestHistoryFollowsDeclaration(t *testing.T) {
+	for _, testCase := range exemptionCases() {
+		t.Run(testCase.name, func(t *testing.T) {
+			payload := []byte(fmt.Sprintf(
+				`{"tools":[%s],"messages":[{"role":"assistant","content":[
+					{"type":"tool_use","id":"toolu_1","name":"bash","input":{}}
+				]}]}`,
+				testCase.declaration,
+			))
+			got := PrefixRequest(payload)
+			if v := gjson.GetBytes(got, "messages.0.content.0.name").String(); v != testCase.want {
+				t.Fatalf("messages.0.content.0.name = %q, want %q", v, testCase.want)
+			}
+		})
+	}
+}
+
+// exemptionCase is one declaration of a tool named bash and the name every
+// other location in the payload must carry once the rewrite has run.
+type exemptionCase struct {
+	name        string // name identifies the kind of tool under test.
+	declaration string // declaration is the tools[] entry, as raw JSON.
+	want        string // want is the name expected at every referencing location.
+}
+
+// exemptionCases returns the two declarations that decide the exemption, so
+// tool_choice and replayed history are exercised against the same pair.
+func exemptionCases() []exemptionCase {
+	return []exemptionCase{
+		{
+			name:        "project tool",
+			declaration: `{"name":"bash","input_schema":{"type":"object"}}`,
+			want:        "new_bash",
+		},
+		{
+			name:        "anthropic tool",
+			declaration: `{"type":"bash_20250124","name":"bash"}`,
+			want:        "bash",
+		},
+	}
+}
+
 // TestPrefixRequestMalformedJSONUnchanged proves a payload that is not valid
 // JSON is returned unchanged rather than rejected.
 func TestPrefixRequestMalformedJSONUnchanged(t *testing.T) {
