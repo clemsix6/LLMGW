@@ -42,6 +42,28 @@ func TestToolPrefixOutboundRewrite(t *testing.T) {
 	})
 }
 
+// TestToolPrefixExemptsAnthropicTools proves a flagged project can declare a
+// tool Anthropic defines: the stub receives its name exactly as sent, because
+// upstream recognises it under that one name and a prefix would break it,
+// while the project's own tool in the same request is still namespaced.
+func TestToolPrefixExemptsAnthropicTools(t *testing.T) {
+	created := testHarness.createKey(t, "toolprefix-anthropic-tool")
+	testHarness.enableToolPrefix(t, created)
+	testHarness.Upstream.Enqueue(defaultStubResponse())
+
+	status, body := gatewayRequest(t, http.MethodPost, "/v1/messages",
+		bytes.NewBufferString(toolPrefixAnthropicToolBody),
+		requestHeaders{authorization: "Bearer " + created.Plaintext})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, safeBodySummary(body))
+	}
+
+	assertUpstreamNamesAt(t, map[string]string{
+		"tools.0.function.name": "web_search",
+		"tools.1.function.name": "new_search_web",
+	})
+}
+
 // TestToolPrefixInboundRewrite proves the response-side strip is the exact
 // inverse of the outbound rewrite: a prefixed name upstream returns comes back
 // stripped to the client in both non-streamed and streamed form, a split
@@ -164,21 +186,29 @@ func (h *Harness) enableToolPrefix(t *testing.T, created governance.CreatedKey) 
 // assistant tool call.
 func assertUpstreamToolNames(t *testing.T, want string) {
 	t.Helper()
+	const historyPath = `messages.#(role=="assistant").tool_calls.0.function.name`
+	assertUpstreamNamesAt(t, map[string]string{
+		"tools.0.function.name":     want,
+		"tool_choice.function.name": want,
+		historyPath:                 want,
+	})
+}
+
+// assertUpstreamNamesAt checks the most recently captured upstream request
+// body against the expected name at each given path — the form the assertion
+// takes when one request's tool names are not all namespaced the same way.
+func assertUpstreamNamesAt(t *testing.T, want map[string]string) {
+	t.Helper()
 	bodies := testHarness.Upstream.Bodies()
 	if len(bodies) == 0 {
 		t.Fatal("upstream captured no request body")
 	}
 	body := bodies[len(bodies)-1]
 
-	if got := gjson.GetBytes(body, "tools.0.function.name").String(); got != want {
-		t.Fatalf("tools.0.function.name = %q, want %q", got, want)
-	}
-	if got := gjson.GetBytes(body, "tool_choice.function.name").String(); got != want {
-		t.Fatalf("tool_choice.function.name = %q, want %q", got, want)
-	}
-	history := gjson.GetBytes(body, `messages.#(role=="assistant").tool_calls.0.function.name`)
-	if got := history.String(); got != want {
-		t.Fatalf("replayed history tool name = %q, want %q", got, want)
+	for path, expected := range want {
+		if got := gjson.GetBytes(body, path).String(); got != expected {
+			t.Fatalf("%s = %q, want %q", path, got, expected)
+		}
 	}
 }
 

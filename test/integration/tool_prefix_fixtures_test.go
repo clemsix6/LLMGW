@@ -44,6 +44,23 @@ const toolPrefixDeclarationBody = `{
 	"messages": [{"role": "user", "content": "fixture-prompt"}]
 }`
 
+// toolPrefixAnthropicToolBody declares an Anthropic-defined tool — recognised
+// by its "type", not its name — alongside the project's own, so one request
+// carries both sides of the exemption.
+const toolPrefixAnthropicToolBody = `{
+	"model": "test-model",
+	"max_tokens": 16,
+	"tools": [
+		{"type": "web_search_20260209", "name": "web_search"},
+		{
+			"name": "search_web",
+			"description": "search the web",
+			"input_schema": {"type": "object", "properties": {}}
+		}
+	],
+	"messages": [{"role": "user", "content": "fixture-prompt"}]
+}`
+
 // toolPrefixStreamingDeclarationBody is toolPrefixDeclarationBody with streaming enabled.
 const toolPrefixStreamingDeclarationBody = `{
 	"model": "test-model",
