@@ -6,6 +6,7 @@ This file guides Claude Code when working in the **LLMGW** repository.
 @~/Skills/go-style.md
 @~/Skills/commit-convention.md
 @~/Skills/git-workflow.md
+@~/Skills/notion-tickets.md
 @~/Skills/feature-pipeline.md
 
 LLMGW is a self-hosted Go gateway that **embeds the CLIProxyAPI SDK**. It adds
@@ -79,3 +80,12 @@ PostgreSQL is mandatory; there is no fallback store.
   its named volume — the SDK rotates provider credentials there.
 - Mount the shared `config.yaml` read-only with host mode `0600`: it can carry
   native provider credentials.
+
+## Notion tickets — LLMGW specifics
+
+The shared rules live in notion-tickets.md (imported above). LLMGW board ids:
+Tasks Tracker data source `29cce079-b0c7-8061-bef5-000b58dfb754`, Pull Requests
+data source `38bce079-b0c7-8121-80d9-000b33467b2b`. `Project` select value:
+**LLMGW**; `Repo` select value: **LLMGW**. No staging environment and no
+watchdog on this repo: statuses go `Not started → In progress → Done` (Done
+once the release tag is deployed to the server).
