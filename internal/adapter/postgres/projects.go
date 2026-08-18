@@ -18,7 +18,7 @@ var ErrProjectNotFound = errors.New("project not found")
 // Projects returns every project ordered by name.
 func (s *Store) Projects(ctx context.Context) ([]governance.Project, error) {
 	const query = `
-SELECT id, name, created_at, prefix_tool_names, COALESCE(default_effort, '')
+SELECT id, name, created_at, prefix_tool_names, COALESCE(default_effort, ''), reject_tool_markup
 FROM project
 ORDER BY name`
 
@@ -58,6 +58,23 @@ func (s *Store) SetProjectToolPrefix(ctx context.Context, name string, enabled b
 	return nil
 }
 
+// SetProjectMarkupGuard enables or disables the leaked-tool-markup response
+// guard for an already-created project. It fails with ErrProjectNotFound rather
+// than creating the project, so the flag can never be the thing that brings a
+// project into being.
+func (s *Store) SetProjectMarkupGuard(ctx context.Context, name string, enabled bool) error {
+	const query = `UPDATE project SET reject_tool_markup = $2 WHERE name = $1`
+
+	tag, err := s.pool.Exec(ctx, query, name, enabled)
+	if err != nil {
+		return fmt.Errorf("set markup guard for project %q:\n%w", name, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("set markup guard for project %q:\n%w", name, ErrProjectNotFound)
+	}
+	return nil
+}
+
 // SetProjectDefaultEffort sets or clears an already-created project's default
 // Anthropic thinking effort. An empty level writes NULL, which is what the
 // injection reads as "no default". It fails with ErrProjectNotFound rather
@@ -81,6 +98,7 @@ func scanProject(row pgx.Row) (governance.Project, error) {
 	var project governance.Project
 	err := row.Scan(
 		&project.ID, &project.Name, &project.CreatedAt, &project.PrefixToolNames, &project.DefaultEffort,
+		&project.RejectToolMarkup,
 	)
 	return project, err
 }

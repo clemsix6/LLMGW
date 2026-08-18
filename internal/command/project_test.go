@@ -32,6 +32,10 @@ func TestProjectUsageAndArguments(t *testing.T) {
 		{"tool-prefix missing name and state", []string{"tool-prefix"}},
 		{"tool-prefix invalid state", []string{"tool-prefix", "demo", "maybe"}},
 		{"tool-prefix extra argument", []string{"tool-prefix", "demo", "on", "extra"}},
+		{"markup-guard missing state", []string{"markup-guard", "demo"}},
+		{"markup-guard missing name and state", []string{"markup-guard"}},
+		{"markup-guard invalid state", []string{"markup-guard", "demo", "maybe"}},
+		{"markup-guard extra argument", []string{"markup-guard", "demo", "on", "extra"}},
 		{"effort missing level", []string{"effort", "demo"}},
 		{"effort missing name and level", []string{"effort"}},
 		{"effort invalid level", []string{"effort", "demo", "extreme"}},
@@ -53,7 +57,7 @@ func TestProjectUsageAndArguments(t *testing.T) {
 			if strings.Contains(err.Error(), "load command configuration") {
 				t.Fatalf("validation reached the store: %v", err)
 			}
-			if !strings.Contains(errOut.String(), "usage: project {list|tool-prefix|effort}") {
+			if !strings.Contains(errOut.String(), "usage: project {list|tool-prefix|markup-guard|effort}") {
 				t.Fatalf("usage output = %q, want the shared usage line", errOut.String())
 			}
 		})
@@ -78,6 +82,32 @@ func TestProjectListAndToolPrefix(t *testing.T) {
 
 	streams, _, _ := factory.streams()
 	err := runProject(context.Background(), []string{"tool-prefix", "does-not-exist", "on"}, streams)
+	if err == nil || !strings.Contains(err.Error(), `"does-not-exist" does not exist`) {
+		t.Fatalf("unknown project error = %v, want a does-not-exist message", err)
+	}
+}
+
+// TestProjectMarkupGuard proves the markup-guard verb writes and reads back
+// through the real store: the flag flips both ways, and an unknown project is
+// rejected rather than created.
+func TestProjectMarkupGuard(t *testing.T) {
+	factory := newCommandStreamsFactory(t)
+	seedProject(t, factory, "guard-demo")
+
+	assertProjectListMarkupGuard(t, factory, "guard-demo", false)
+
+	output := runProjectOrFail(t, factory, "markup-guard", "guard-demo", "on")
+	want := "project\tguard-demo\nreject_tool_markup\ttrue\n"
+	if output != want {
+		t.Fatalf("project markup-guard output = %q, want %q", output, want)
+	}
+	assertProjectListMarkupGuard(t, factory, "guard-demo", true)
+
+	runProjectOrFail(t, factory, "markup-guard", "guard-demo", "off")
+	assertProjectListMarkupGuard(t, factory, "guard-demo", false)
+
+	streams, _, _ := factory.streams()
+	err := runProject(context.Background(), []string{"markup-guard", "does-not-exist", "on"}, streams)
 	if err == nil || !strings.Contains(err.Error(), `"does-not-exist" does not exist`) {
 		t.Fatalf("unknown project error = %v, want a does-not-exist message", err)
 	}
@@ -291,6 +321,33 @@ func assertProjectListState(t *testing.T, factory commandStreamsFactory, name st
 		want := fmt.Sprintf("prefix_tool_names\t%t", prefixEnabled)
 		if lines[i+2] != want {
 			t.Fatalf("project %q prefix state = %q, want %q", name, lines[i+2], want)
+		}
+		return
+	}
+	t.Fatalf("project list = %q, missing entry for %q", output, name)
+}
+
+// assertProjectListMarkupGuard runs project list and checks one project's
+// printed reject_tool_markup field.
+func assertProjectListMarkupGuard(
+	t *testing.T,
+	factory commandStreamsFactory,
+	name string,
+	enabled bool,
+) {
+	t.Helper()
+	output := runProjectOrFail(t, factory, "list")
+	lines := strings.Split(output, "\n")
+	for i, line := range lines {
+		if line != "name\t"+name {
+			continue
+		}
+		if i+4 >= len(lines) {
+			t.Fatalf("project %q entry is truncated: %q", name, output)
+		}
+		want := fmt.Sprintf("reject_tool_markup\t%t", enabled)
+		if lines[i+4] != want {
+			t.Fatalf("project %q markup-guard state = %q, want %q", name, lines[i+4], want)
 		}
 		return
 	}
