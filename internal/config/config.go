@@ -121,6 +121,7 @@ func Load(path string, getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("load CLIProxyAPI configuration:\n%w", err)
 	}
+	ensureClaudeShortAliases(proxy)
 	cfg := Config{
 		Path:           path,
 		Proxy:          proxy,
