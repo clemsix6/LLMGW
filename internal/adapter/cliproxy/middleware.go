@@ -224,9 +224,14 @@ func (m *Middleware) admit(
 	}
 	defer m.complete(c, identity)
 	if finalizeResponse := installToolPrefixWriter(c, keyIdentity); finalizeResponse != nil {
-		// Registered last so LIFO runs it first: the rewritten response must be
-		// fully on the wire before completion records the status it ended on.
+		// Registered after complete so LIFO runs it first: the rewritten response
+		// must be fully on the wire before completion records the status it ended on.
 		defer finalizeResponse()
+	}
+	if finalizeGuard := installMarkupGuard(c, keyIdentity, identity.RequestID); finalizeGuard != nil {
+		// Registered last so LIFO runs it before every other finalization: the
+		// screen decides the status the layers beneath it commit and record.
+		defer finalizeGuard()
 	}
 	c.Next()
 }

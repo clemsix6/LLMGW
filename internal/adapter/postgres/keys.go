@@ -51,7 +51,7 @@ func (s *Store) KeyByPublicID(ctx context.Context, publicID string) (governance.
 	const query = `
 SELECT ck.id, ck.project_id, p.name, ck.name, ck.public_id, ck.digest,
        ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names,
-       COALESCE(p.default_effort, '')
+       COALESCE(p.default_effort, ''), p.reject_tool_markup
 FROM client_key ck
 JOIN project p ON p.id = ck.project_id
 WHERE ck.public_id = $1`
@@ -71,7 +71,7 @@ func (s *Store) KeyByID(ctx context.Context, keyID int64) (governance.ClientKey,
 	const query = `
 SELECT ck.id, ck.project_id, p.name, ck.name, ck.public_id, ck.digest,
        ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names,
-       COALESCE(p.default_effort, '')
+       COALESCE(p.default_effort, ''), p.reject_tool_markup
 FROM client_key ck
 JOIN project p ON p.id = ck.project_id
 WHERE ck.id = $1`
@@ -124,7 +124,7 @@ func (s *Store) ListKeys(ctx context.Context, project string) ([]governance.Clie
 	const query = `
 SELECT ck.id, ck.project_id, p.name, ck.name, ck.public_id, ck.digest,
        ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names,
-       COALESCE(p.default_effort, '')
+       COALESCE(p.default_effort, ''), p.reject_tool_markup
 FROM client_key ck
 JOIN project p ON p.id = ck.project_id
 WHERE ($1 = '' OR p.name = $1)
@@ -251,7 +251,7 @@ func lockedClientKey(ctx context.Context, tx pgx.Tx, keyID int64) (governance.Cl
 	const query = `
 SELECT ck.id, ck.project_id, p.name, ck.name, ck.public_id, ck.digest,
        ck.created_at, ck.expires_at, ck.revoked_at, ck.last_used_at, p.prefix_tool_names,
-       COALESCE(p.default_effort, '')
+       COALESCE(p.default_effort, ''), p.reject_tool_markup
 FROM client_key ck
 JOIN project p ON p.id = ck.project_id
 WHERE ck.id = $1
@@ -303,7 +303,7 @@ func scanClientKey(row pgx.Row) (governance.ClientKey, error) {
 	err := row.Scan(
 		&key.ID, &key.ProjectID, &key.ProjectName, &key.Name, &key.PublicID, &key.Digest,
 		&key.CreatedAt, &key.ExpiresAt, &key.RevokedAt, &key.LastUsedAt, &key.PrefixToolNames,
-		&key.DefaultEffort,
+		&key.DefaultEffort, &key.RejectToolMarkup,
 	)
 	return key, err
 }

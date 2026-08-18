@@ -18,3 +18,6 @@
 # OS / editor
 .DS_Store
 *.swp
+
+# Local operator configuration — carries the machine's own paths and env wiring.
+config.yaml

@@ -9,6 +9,9 @@ type Project struct {
 	CreatedAt       time.Time // CreatedAt is the UTC creation time.
 	PrefixToolNames bool      // PrefixToolNames reports whether outbound tool names are namespaced for this project.
 	DefaultEffort   string    // DefaultEffort is the project's default Anthropic thinking effort, empty meaning none.
+	// RejectToolMarkup reports whether non-streamed responses carrying leaked
+	// tool-call markup are refused for this project.
+	RejectToolMarkup bool
 }
 
 // ClientKey is a persisted project-scoped client credential.
@@ -25,6 +28,9 @@ type ClientKey struct {
 	LastUsedAt      *time.Time // LastUsedAt is the optional UTC last-use time.
 	PrefixToolNames bool       // PrefixToolNames reports whether the owning project namespaces outbound tool names.
 	DefaultEffort   string     // DefaultEffort is the owning project's default Anthropic thinking effort, empty meaning none.
+	// RejectToolMarkup reports whether the owning project refuses non-streamed
+	// responses carrying leaked tool-call markup.
+	RejectToolMarkup bool
 }
 
 // KeyInfo is the non-secret representation of a client key.
@@ -49,6 +55,9 @@ type KeyIdentity struct {
 	PublicID        string // PublicID is the key's non-secret lookup identifier.
 	PrefixToolNames bool   // PrefixToolNames reports whether the authenticated project namespaces outbound tool names.
 	DefaultEffort   string // DefaultEffort is the authenticated project's default Anthropic thinking effort, empty meaning none.
+	// RejectToolMarkup reports whether the authenticated project refuses
+	// non-streamed responses carrying leaked tool-call markup.
+	RejectToolMarkup bool
 }
 
 // CreatedKey combines persisted key metadata with its one-time plaintext value.
