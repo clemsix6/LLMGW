@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/clemsix6/LLMGW/internal/config"
 	"github.com/clemsix6/LLMGW/internal/domain/governance/alert"
@@ -119,7 +120,7 @@ func TestServeWithAlertingUnsetTouchesNoWebhook(t *testing.T) {
 func TestServeAlertingLifecycle(t *testing.T) {
 	tests := []struct {
 		name       string
-		arrange    func(*serveDependencies, context.CancelFunc)
+		arrange    func(*serveDependencies, context.CancelFunc, *webhookStub)
 		wantReason string
 		wantStart  bool
 	}{
@@ -199,7 +200,7 @@ func runAlertingServe(
 	t *testing.T,
 	stub *webhookStub,
 	wantDeliveries int,
-	arrange func(*serveDependencies, context.CancelFunc),
+	arrange func(*serveDependencies, context.CancelFunc, *webhookStub),
 ) []deliveredEmbed {
 	t.Helper()
 
@@ -207,7 +208,7 @@ func runAlertingServe(
 	deps := successfulServeDependencies(&cfg, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	arrange(&deps, cancel)
+	arrange(&deps, cancel, stub)
 
 	streams := testRootStreams(alertingEnvironment(stub.server.URL))
 	if err := runServeWith(ctx, nil, streams, deps); err == nil {
@@ -223,9 +224,10 @@ func runAlertingServe(
 
 // arrangeCancelledRun makes the embedded service return because the serve
 // context was cancelled under it.
-func arrangeCancelledRun(deps *serveDependencies, cancel context.CancelFunc) {
+func arrangeCancelledRun(deps *serveDependencies, cancel context.CancelFunc, stub *webhookStub) {
 	deps.buildService = func(config.Config, *serveStore, []byte, *alert.Tracker) (serveService, error) {
 		return &fakeServeService{run: func(ctx context.Context) error {
+			awaitStartDelivered(stub)
 			cancel()
 			<-ctx.Done()
 			return ctx.Err()
@@ -235,17 +237,34 @@ func arrangeCancelledRun(deps *serveDependencies, cancel context.CancelFunc) {
 
 // arrangeFailingRun makes the embedded service return on its own while the
 // serve context is still live.
-func arrangeFailingRun(deps *serveDependencies, _ context.CancelFunc) {
+func arrangeFailingRun(deps *serveDependencies, _ context.CancelFunc, stub *webhookStub) {
 	deps.buildService = func(config.Config, *serveStore, []byte, *alert.Tracker) (serveService, error) {
 		return &fakeServeService{run: func(context.Context) error {
+			awaitStartDelivered(stub)
 			return errors.New("embedded service failed")
 		}}, nil
 	}
 }
 
+// awaitStartDelivered holds the fixture until the starting event has actually
+// left the webhook, which is what makes the ordering assertion below legitimate.
+//
+// The gateway runs for a while between its two lifecycle events, so in
+// production the starting one is long delivered before the stopping one is even
+// enqueued. A fixture that returns instantly collapses that gap: both events sit
+// in the queue when Close runs, and the drain is deliberately newest-first
+// (see Webhook.drain), so it hands them over reversed. Synchronising here
+// reproduces the real sequence instead of racing the delivery goroutine.
+//
+// A timeout is not failed on: the assertions that follow report the real
+// problem with far more context than a bare deadline would.
+func awaitStartDelivered(stub *webhookStub) {
+	stub.awaitAtLeast(1, 5*time.Second)
+}
+
 // arrangeFailingStore fails a seam registered after the alerting defer, and
 // wraps the DSN into the returned error the stopping event must not render.
-func arrangeFailingStore(deps *serveDependencies, _ context.CancelFunc) {
+func arrangeFailingStore(deps *serveDependencies, _ context.CancelFunc, _ *webhookStub) {
 	deps.openStore = func(_ context.Context, dsn string) (*serveStore, error) {
 		return nil, fmt.Errorf("postgres unavailable for %s", dsn)
 	}
