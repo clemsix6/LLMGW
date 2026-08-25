@@ -9,9 +9,18 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Called by tag-on-merge.yml right after it pushes the tag. A tag created with
+  # GITHUB_TOKEN never re-triggers a workflow, so the merge path must invoke this
+  # one directly instead of relying on the tag push above.
+  workflow_call:
+    inputs:
+      version:
+        description: Version to publish, without the leading v
+        required: true
+        type: string
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 jobs:
@@ -35,12 +44,25 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # One source of truth for the version, whichever entry point fired:
+      # the workflow_call input, or the tag ref stripped of its leading v.
+      - name: Resolve version
+        id: version
+        run: |
+          set -euo pipefail
+          version='${{ inputs.version }}'
+          if [ -z "$version" ]; then
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Publishing $version"
+
       - uses: docker/metadata-action@v5
         id: meta
         with:
           images: ghcr.io/clemsix6/llmgw
           tags: |
-            type=semver,pattern={{version}}
+            type=raw,value=${{ steps.version.outputs.version }}
             type=raw,value=latest
 
       - uses: docker/build-push-action@v6
@@ -52,3 +74,21 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # The image is the deliverable; the Release is how a human finds out it
+      # exists. Creating it here is what keeps the Releases page from drifting
+      # away from what is actually deployed.
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release v$VERSION already exists, nothing to do."
+            exit 0
+          fi
+          gh release create "v$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "v$VERSION" \
+            --generate-notes

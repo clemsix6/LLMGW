@@ -73,6 +73,34 @@ PostgreSQL is mandatory; there is no fallback store.
   automatically. Live validation is operator-run and gated solely on
   `LLMGW_LIVE_CONFIG`.
 
+## Release flow (CRUCIAL)
+
+`main` only advances through a merged PR, and **every merge ships a version**.
+There is no staging: what lands on `main` becomes an image and a Release within
+minutes.
+
+The version is a judgement about the change, so **you write it**, in the `VERSION`
+file at the repo root, as part of the PR. Nothing is ever incremented
+automatically. Given `x.y.z`:
+
+- **`z`** — a fix. Behaviour that was wrong is now right, no new surface.
+- **`y`** — a minor feature. New capability, existing callers unaffected.
+- **`x`** — a major feature. A change consumers must adapt to: an interface, a
+  configuration contract, a migration they have to plan for.
+
+On merge, `tag-on-merge.yml` reads `VERSION`, refuses it if it is malformed or
+already tagged, creates `v<version>`, then calls `release.yml` to build the image,
+push it to GHCR under both `<version>` and `latest`, and create the GitHub
+Release. **Forgetting to bump `VERSION` fails the merge build** — that refusal is
+deliberate, and it is what keeps `main`, the published image and the Releases page
+from drifting apart.
+
+Two consequences worth knowing. A documentation-only PR still produces a patch
+version and an image identical in behaviour to the previous one; that is the price
+of never having to wonder whether the registry matches `main`. And a tag pushed by
+hand still triggers `release.yml` on its own, so the manual path stays open for a
+rebuild — but it bypasses the `VERSION` check, so prefer the merge path.
+
 ## Container operations
 
 - The runtime image is distroless and runs as user/group `65532:65532`.

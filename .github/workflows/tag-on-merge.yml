@@ -1,0 +1,65 @@
+name: Tag on merge
+
+# main only ever advances through a merged PR, and every merge ships a version.
+# The version is a judgement call, so a human or agent writes it into VERSION
+# inside the PR; this workflow only reads it, tags it, and publishes. Nothing is
+# incremented automatically — see the release flow section of CLAUDE.md.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    name: Read VERSION and tag
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read and validate VERSION
+        id: read
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < VERSION)"
+
+          if ! printf '%s' "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error file=VERSION::'$version' is not a x.y.z version."
+            exit 1
+          fi
+
+          # An unchanged VERSION means the PR shipped code without deciding what
+          # kind of change it was. Refusing here is the whole point: it is what
+          # keeps main and the published image from drifting apart.
+          if git rev-parse "v$version" >/dev/null 2>&1; then
+            echo "::error file=VERSION::v$version is already tagged. Every merge into main must bump VERSION — z for a fix, y for a minor feature, x for a major one."
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push the tag
+        env:
+          VERSION: ${{ steps.read.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag -a "v$VERSION" -m "v$VERSION"
+          git push origin "v$VERSION"
+
+  publish:
+    name: Build, push and release
+    needs: tag
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.tag.outputs.version }}
+    permissions:
+      contents: write
+      packages: write
