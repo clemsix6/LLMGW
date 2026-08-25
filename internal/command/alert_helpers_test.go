@@ -62,6 +62,22 @@ func (s *webhookStub) received() []string {
 	return append([]string(nil), s.bodies...)
 }
 
+// awaitAtLeast polls until count payloads arrived, reporting whether they did.
+//
+// Unlike waitFor it never touches *testing.T, so a fixture running on the
+// gateway's own goroutine can synchronise on a delivery without failing the
+// test from the wrong goroutine.
+func (s *webhookStub) awaitAtLeast(count int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if len(s.received()) >= count {
+			return true
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return false
+}
+
 // waitFor polls until at least count payloads arrived, under a bounded deadline.
 func (s *webhookStub) waitFor(t *testing.T, count int) []string {
 	t.Helper()
