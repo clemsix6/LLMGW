@@ -41,7 +41,8 @@ const (
 	// maximumUsageOutstandingCapacity prevents an operator typo from defeating
 	// the process memory bound.
 	maximumUsageOutstandingCapacity = 1024
-	// maximumUsageRecordsPerRequest is the reviewed v7.2.102 safety ceiling.
+	// maximumUsageRecordsPerRequest is the reviewed safety ceiling for the
+	// pinned SDK.
 	maximumUsageRecordsPerRequest = 256
 )
 
@@ -62,7 +63,7 @@ type Config struct {
 	Proxy          *sdkconfig.Config // Proxy is the native CLIProxyAPI configuration.
 	LLMGW          LLMGW             // LLMGW contains gateway-specific configuration.
 	UsageRetention time.Duration     // UsageRetention is the configured usage retention period.
-	// MaxUsageRecords is the proven v7.2.102 usage-record bound for one
+	// MaxUsageRecords is the proven pinned-SDK usage-record bound for one
 	// generation, excluding its one FIFO barrier.
 	MaxUsageRecords int
 }
@@ -361,8 +362,8 @@ func usageRecordBound(cfg *sdkconfig.Config) (int, error) {
 }
 
 // maxEffectiveOpenAICompatModelPool reproduces the SDK's case-insensitive,
-// distinct-upstream-name alias pool size. Every other v7.2.102 execution path
-// has one model candidate.
+// distinct-upstream-name alias pool size. Every other pinned-SDK execution
+// path has one model candidate.
 func maxEffectiveOpenAICompatModelPool(cfg *sdkconfig.Config) int {
 	maximum := 1
 	for _, provider := range cfg.OpenAICompatibility {

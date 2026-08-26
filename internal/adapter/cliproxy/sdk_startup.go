@@ -18,7 +18,7 @@ var (
 
 // sdkStartupBarrier observes the pinned SDK's final synchronous initialization event.
 //
-// CLIProxyAPI v7.2.102 invokes OnAfterStart before assigning fields consumed by
+// The pinned CLIProxyAPI invokes OnAfterStart before assigning fields consumed by
 // Shutdown. Its final initialization log occurs after those assignments and
 // the core auto-refresh state, so this hook supplies the missing happens-before
 // edge for concurrent Run and Shutdown.

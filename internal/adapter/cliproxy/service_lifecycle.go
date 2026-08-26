@@ -436,7 +436,7 @@ func startupCompatibilityError() error {
 		errors.New("required exact startup event was not observed"),
 	)
 	return fmt.Errorf(
-		"wait for embedded CLIProxyAPI v7.2.102 startup event:\n%w",
+		"wait for embedded CLIProxyAPI startup event:\n%w",
 		cause,
 	)
 }
