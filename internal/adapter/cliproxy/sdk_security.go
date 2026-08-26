@@ -26,6 +26,7 @@ func buildSecureSDKWithAfterStart(
 	}
 
 	applyCooldownConfig(cfg)
+	armUpstreamFailureRedaction()
 	clear := RegisterExclusiveAccess(provider)
 	enforceExclusiveAccess(manager, provider)
 	builder.WithConfig(cfg).
