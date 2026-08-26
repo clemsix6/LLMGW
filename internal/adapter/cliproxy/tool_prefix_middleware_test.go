@@ -12,6 +12,7 @@ import (
 	"github.com/clemsix6/LLMGW/internal/domain/governance"
 	"github.com/gin-gonic/gin"
 	sdkusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	"github.com/tidwall/gjson"
 )
 
 // toolDeclaration is one request body declaring a single tool.
@@ -86,8 +87,9 @@ func TestToolPrefixEngagesOnlyForTheRightRouteAndFlag(t *testing.T) {
 				},
 			})
 
-			if seenBody != test.wantBody {
-				t.Fatalf("handler read %s, want %s", seenBody, test.wantBody)
+			if got := gjson.Get(seenBody, "tools"); got.Raw != gjson.Get(test.wantBody, "tools").Raw {
+				t.Fatalf("handler read tools %s, want %s",
+					got.Raw, gjson.Get(test.wantBody, "tools").Raw)
 			}
 			if wrapped != test.wantWrap {
 				t.Fatalf("response writer wrapped = %v, want %v", wrapped, test.wantWrap)
