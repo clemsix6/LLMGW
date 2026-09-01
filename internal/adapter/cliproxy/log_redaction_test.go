@@ -34,6 +34,27 @@ func TestUpstreamFailureLogsDropTheProviderBody(t *testing.T) {
 	}
 }
 
+// TestStatusPrefixedUpstreamFailureLogsDropTheProviderBody proves the redaction
+// also covers the SDK's other shape of the same warning, where the upstream
+// status and duration precede the message. Without this, that variant carries
+// the provider body into the logs untouched.
+func TestStatusPrefixedUpstreamFailureLogsDropTheProviderBody(t *testing.T) {
+	logger, captured := redactingLogger()
+
+	logger.Warnf(
+		"%3d | %13v | upstream execution failed: provider=%s model=%s auth=%s err=%s",
+		503, "1ms", "claude", "claude-opus-5", "api_key=abc...xyz", providerErrorBody,
+	)
+
+	written := captured.String()
+	if strings.Contains(written, "secret-caller-content") {
+		t.Fatal("status-prefixed upstream failure log retained the provider error body")
+	}
+	if !strings.Contains(written, "503") || !strings.Contains(written, "provider=claude") {
+		t.Fatalf("status-prefixed upstream failure log lost its diagnosable fields: %s", written)
+	}
+}
+
 // TestUnrelatedWarningsSurviveTheRedaction proves the hook rewrites only the
 // warning it targets. Without this, a redaction meant for one SDK message could
 // silently truncate every other warning the gateway emits.
