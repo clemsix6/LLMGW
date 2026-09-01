@@ -289,7 +289,7 @@ plugins:
   enabled: false
 routing:
   strategy: round-robin
-  session-affinity: false
+  session-affinity: true
 openai-compatibility:
   - name: integration
     base-url: %q

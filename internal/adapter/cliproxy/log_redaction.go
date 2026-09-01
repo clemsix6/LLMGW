@@ -8,11 +8,14 @@ import (
 )
 
 const (
-	// upstreamFailureMessagePrefix identifies the embedded SDK's upstream
+	// upstreamFailureMessageMarker identifies the embedded SDK's upstream
 	// failure warning. Its trailing error field carries the provider response
 	// body verbatim, and that body is caller-influenced text: a provider is
-	// free to quote the request back inside its own error message.
-	upstreamFailureMessagePrefix = "upstream execution failed: "
+	// free to quote the request back inside its own error message. The SDK
+	// emits the warning in two shapes — bare, and prefixed with the upstream
+	// status and duration — so the marker is matched anywhere in the message,
+	// not just at its start.
+	upstreamFailureMessageMarker = "upstream execution failed: "
 	// upstreamFailureErrorMarker opens the provider body inside that warning.
 	upstreamFailureErrorMarker = " err="
 	// redactedUpstreamError replaces the provider body. The failure itself
@@ -41,7 +44,7 @@ func (upstreamFailureRedaction) Levels() []log.Level {
 
 // Fire replaces the provider error body with a fixed placeholder.
 func (upstreamFailureRedaction) Fire(entry *log.Entry) error {
-	if entry == nil || !strings.HasPrefix(entry.Message, upstreamFailureMessagePrefix) {
+	if entry == nil || !strings.Contains(entry.Message, upstreamFailureMessageMarker) {
 		return nil
 	}
 

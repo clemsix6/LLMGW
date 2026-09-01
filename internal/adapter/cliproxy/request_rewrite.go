@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/clemsix6/LLMGW/internal/domain/contextedit"
 	"github.com/clemsix6/LLMGW/internal/domain/effort"
 	"github.com/clemsix6/LLMGW/internal/domain/governance"
 	"github.com/clemsix6/LLMGW/internal/domain/toolprefix"
@@ -20,18 +21,19 @@ import (
 const maxRewriteBody = 32 << 20
 
 // requestRewrite is what one request's body needs before the SDK handler reads
-// it. A zero value means nothing applies, which is the case for every project
-// that enabled neither setting.
+// it. A zero value means nothing applies, which is the case for every request
+// that is not a generation.
 type requestRewrite struct {
-	prefixToolNames bool   // prefixToolNames namespaces the tool names the payload declares.
-	effortLevel     string // effortLevel is the thinking effort to inject, empty meaning none.
+	prefixToolNames   bool   // prefixToolNames namespaces the tool names the payload declares.
+	effortLevel       string // effortLevel is the thinking effort to inject, empty meaning none.
+	claimContextEdits bool   // claimContextEdits keeps context editing with the caller.
 }
 
 // engaged reports whether any transformation applies. A request none applies to
 // keeps exactly today's path: its body is never read and nothing is allocated
 // on its behalf.
 func (r requestRewrite) engaged() bool {
-	return r.prefixToolNames || r.effortLevel != ""
+	return r.prefixToolNames || r.effortLevel != "" || r.claimContextEdits
 }
 
 // apply runs every engaged transformation over one payload, in one pass over
@@ -40,14 +42,18 @@ func (r requestRewrite) apply(payload []byte) []byte {
 	if r.prefixToolNames {
 		payload = toolprefix.PrefixRequest(payload)
 	}
+	if r.claimContextEdits {
+		payload = contextedit.Claim(payload)
+	}
 	return effort.Apply(payload, r.effortLevel)
 }
 
 // resolveRequestRewrite decides what the authenticated project asks of this
 // request. The tool-name rewrite covers both Anthropic payload routes, since
-// count_tokens must count the payload actually sent; the effort injection
-// covers generation alone, because effort moves output tokens and cannot move
-// the count count_tokens answers with.
+// count_tokens must count the payload actually sent; the effort injection and
+// the context-editing claim cover generation alone — effort moves output tokens
+// and cannot move the count count_tokens answers with, and only a generation
+// carries a prompt cache to protect.
 func resolveRequestRewrite(
 	identity governance.KeyIdentity,
 	request *http.Request,
@@ -62,6 +68,7 @@ func resolveRequestRewrite(
 	}
 	if request.URL.Path == messagesPath {
 		rewrite.effortLevel = identity.DefaultEffort
+		rewrite.claimContextEdits = true
 	}
 	return rewrite
 }

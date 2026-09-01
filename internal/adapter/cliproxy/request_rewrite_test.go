@@ -17,9 +17,11 @@ const plainGeneration = `{"model":"claude-opus-5","messages":[]}`
 
 // TestRequestRewriteRouteEligibility proves each transformation reaches its own
 // routes: the tool-name rewrite covers both Anthropic payload routes, while the
-// effort injection stops at generation. count_tokens is answered locally and
-// issues no upstream call, so the eligibility predicate is the only place that
-// exclusion has an observable.
+// effort injection stops at generation, and so does the context-editing claim:
+// count_tokens must count the payload the client sent, and a field the gateway
+// added would move that count. count_tokens is answered locally and issues no
+// upstream call, so the eligibility predicate is the only place those
+// exclusions have an observable.
 func TestRequestRewriteRouteEligibility(t *testing.T) {
 	identity := governance.KeyIdentity{PrefixToolNames: true, DefaultEffort: "high"}
 	tests := []struct {
@@ -28,6 +30,7 @@ func TestRequestRewriteRouteEligibility(t *testing.T) {
 		path       string
 		wantPrefix bool
 		wantEffort string
+		wantClaim  bool
 	}{
 		{
 			name:       "messages",
@@ -35,6 +38,7 @@ func TestRequestRewriteRouteEligibility(t *testing.T) {
 			path:       messagesPath,
 			wantPrefix: true,
 			wantEffort: "high",
+			wantClaim:  true,
 		},
 		{
 			name:       "count_tokens",
@@ -59,9 +63,11 @@ func TestRequestRewriteRouteEligibility(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(test.method, test.path, nil)
 			got := resolveRequestRewrite(identity, request)
-			if got.prefixToolNames != test.wantPrefix || got.effortLevel != test.wantEffort {
-				t.Fatalf("resolveRequestRewrite = %+v, want prefix %v effort %q",
-					got, test.wantPrefix, test.wantEffort)
+			if got.prefixToolNames != test.wantPrefix ||
+				got.effortLevel != test.wantEffort ||
+				got.claimContextEdits != test.wantClaim {
+				t.Fatalf("resolveRequestRewrite = %+v, want prefix %v effort %q claim %v",
+					got, test.wantPrefix, test.wantEffort, test.wantClaim)
 			}
 		})
 	}
@@ -69,7 +75,9 @@ func TestRequestRewriteRouteEligibility(t *testing.T) {
 
 // TestEffortInjectionReachesTheOutboundBody proves the level the authenticated
 // project carries is what the SDK handler reads, and that a project without one
-// keeps the body the client sent.
+// contributes no effort of its own. Every generation also carries the
+// context-editing claim, so the body is compared field by field rather than
+// whole.
 func TestEffortInjectionReachesTheOutboundBody(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -104,22 +112,23 @@ func TestEffortInjectionReachesTheOutboundBody(t *testing.T) {
 			if got != test.want {
 				t.Fatalf("output_config.effort = %q, want %q", got, test.want)
 			}
-			if test.level == "" && seenBody != plainGeneration {
-				t.Fatalf("handler read %s, want the client body unchanged", seenBody)
+			if test.level == "" && gjson.Get(seenBody, "output_config").Exists() {
+				t.Fatalf("handler read %s, want no output_config at all", seenBody)
 			}
+			assertClientFieldsIntact(t, seenBody, plainGeneration)
 		})
 	}
 }
 
-// TestDisabledThinkingKeepsTheClientBody proves the gateway itself declines to
-// inject into a request that turned thinking off, which on Opus 5 would be a
+// TestDisabledThinkingKeepsTheClientEffort proves the gateway itself declines
+// to inject into a request that turned thinking off, which on Opus 5 would be a
 // 400 above effort high.
 //
 // It is asserted here rather than end to end because the embedded SDK deletes
 // output_config.effort from any thinking-off request on its way upstream: the
 // integration assertion would hold with the gateway's own guard removed, and
 // only this one bites.
-func TestDisabledThinkingKeepsTheClientBody(t *testing.T) {
+func TestDisabledThinkingKeepsTheClientEffort(t *testing.T) {
 	const disabledThinking = `{"model":"claude-opus-5","messages":[],"thinking":{"type":"disabled"}}`
 
 	keys := validKeys()
@@ -140,8 +149,21 @@ func TestDisabledThinkingKeepsTheClientBody(t *testing.T) {
 		},
 	})
 
-	if seenBody != disabledThinking {
-		t.Fatalf("handler read %s, want the client body unchanged", seenBody)
+	if got := gjson.Get(seenBody, "output_config"); got.Exists() {
+		t.Fatalf("handler read output_config %s, want none", got.Raw)
+	}
+	assertClientFieldsIntact(t, seenBody, disabledThinking)
+}
+
+// assertClientFieldsIntact proves every top-level field the client sent
+// survived the rewrite with its value, which is what "the body was left alone"
+// means once the gateway adds a field of its own to every generation.
+func assertClientFieldsIntact(t *testing.T, seenBody, clientBody string) {
+	t.Helper()
+	for field, want := range gjson.Parse(clientBody).Map() {
+		if got := gjson.Get(seenBody, field); got.Raw != want.Raw {
+			t.Fatalf("handler read %s = %s, want %s", field, got.Raw, want.Raw)
+		}
 	}
 }
 
