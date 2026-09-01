@@ -24,7 +24,11 @@ save-cooldown-status: false
 
 routing:
   strategy: round-robin
-  session-affinity: false
+  # Sticky sessions pin every turn of one conversation to the same upstream
+  # account. Anthropic's prompt cache lives per account, so without this a
+  # multi-turn agent loop round-robins across accounts and re-pays its whole
+  # context as a cache write on almost every turn.
+  session-affinity: true
 
 llmgw:
   postgres-dsn-env: LLMGW_POSTGRES_DSN

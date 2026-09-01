@@ -197,11 +197,6 @@ func (c Config) validateUsageBackpressure() (int, error) {
 			"validate configuration usage backpressure:\nmax-retry-credentials must be positive",
 		)
 	}
-	if c.Proxy.Routing.SessionAffinity {
-		return 0, errors.New(
-			"validate configuration usage backpressure:\nrouting.session-affinity must be false",
-		)
-	}
 	if c.Proxy.DisableImageGeneration.String() != "true" {
 		return 0, errors.New(
 			"validate configuration usage backpressure:\ndisable-image-generation must be true",
@@ -304,9 +299,6 @@ func validateSecurity(projection securityProjection, getenv func(string) string)
 	}
 	if projection.MaxRetryCredentials <= 0 {
 		return errors.New("validate configuration security:\nmax-retry-credentials must be positive")
-	}
-	if projection.Routing.SessionAffinity {
-		return errors.New("validate configuration security:\nrouting.session-affinity must be false")
 	}
 	if !imageGenerationDisabled(projection.DisableImageGeneration) {
 		return errors.New("validate configuration security:\ndisable-image-generation must be true")
