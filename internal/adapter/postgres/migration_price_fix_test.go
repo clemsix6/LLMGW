@@ -47,7 +47,7 @@ INSERT INTO model_price (
     input_per_million, output_per_million,
     cache_read_per_million, cache_creation_per_million,
     effective_from
-) VALUES ('operator-contract', 'claude-haiku-4-5', '*', 0.80, 4, 0.08, 1, '1970-01-01')`
+) VALUES ('operator-contract', 'claude-haiku-4-5', '*', 0.80, 4, 0.08, 1, '1970-01-01T00:00:00Z')`
 	if _, err := store.pool.Exec(ctx, query); err != nil {
 		t.Fatalf("seed operator haiku price: %v", err)
 	}

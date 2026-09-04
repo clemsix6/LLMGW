@@ -1,7 +1,7 @@
 -- Repairs the seeded price of claude-haiku-4-5, which carried Haiku 3.5 rates.
 --
 -- Migration 0003 seeded the model with the published rates of the previous
--- generation, so every attempt was costed at 0.8x its real price. The error
+-- generation, so every attempt was costed under its real price. The error
 -- then spread on its own: 0011 duplicated the row onto the dated
 -- "claude-haiku-4-5-*" pattern, and 0013 derived both cache rates from the
 -- wrong input. All four rates on both patterns are wrong, by the same factor.
@@ -20,8 +20,8 @@
 -- Migration 0003 is deliberately left as it stands. Applied migrations are
 -- recorded by name and never replayed, so editing it would repair nothing on
 -- an existing database while making the file disagree with what those
--- databases actually ran. A database created from scratch replays 0003, then
--- 0011, 0013 and this statement, and ends at the correct rates.
+-- databases actually ran. A database created from scratch replays the seed and
+-- everything derived from it, this statement last, and ends at the right rates.
 UPDATE model_price
 SET input_per_million          = 1,
     output_per_million         = 5,
