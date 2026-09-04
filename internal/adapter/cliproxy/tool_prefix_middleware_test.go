@@ -18,48 +18,36 @@ import (
 // toolDeclaration is one request body declaring a single tool.
 const toolDeclaration = `{"tools":[{"name":"search_web"}]}`
 
-// TestToolPrefixEngagesOnlyForTheRightRouteAndFlag proves the rewrite reaches
-// exactly the two Anthropic routes of a flagged project, and that a project
-// without the flag keeps today's path: its body is never read and its writer
-// is never wrapped.
-func TestToolPrefixEngagesOnlyForTheRightRouteAndFlag(t *testing.T) {
+// TestToolPrefixEngagesOnlyForTheRightRoutes proves the rewrite reaches
+// exactly the two Anthropic payload routes, for every project, and that every
+// other route keeps today's path: its body is never read and its writer is
+// never wrapped.
+func TestToolPrefixEngagesOnlyForTheRightRoutes(t *testing.T) {
 	tests := []struct {
 		name     string
 		method   string
 		path     string
-		enabled  bool
 		wantBody string
 		wantWrap bool
 	}{
 		{
-			name:     "messages with the flag",
+			name:     "messages",
 			method:   http.MethodPost,
 			path:     "/v1/messages",
-			enabled:  true,
-			wantBody: `{"tools":[{"name":"new_search_web"}]}`,
+			wantBody: `{"tools":[{"name":"mcp__llmgw__search_web"}]}`,
 			wantWrap: true,
 		},
 		{
-			name:     "count_tokens with the flag",
+			name:     "count_tokens",
 			method:   http.MethodPost,
 			path:     "/v1/messages/count_tokens",
-			enabled:  true,
-			wantBody: `{"tools":[{"name":"new_search_web"}]}`,
+			wantBody: `{"tools":[{"name":"mcp__llmgw__search_web"}]}`,
 			wantWrap: false,
 		},
 		{
-			name:     "messages without the flag",
-			method:   http.MethodPost,
-			path:     "/v1/messages",
-			enabled:  false,
-			wantBody: toolDeclaration,
-			wantWrap: false,
-		},
-		{
-			name:     "models with the flag",
+			name:     "models",
 			method:   http.MethodGet,
 			path:     "/v1/models",
-			enabled:  true,
 			wantBody: toolDeclaration,
 			wantWrap: false,
 		},
@@ -67,16 +55,13 @@ func TestToolPrefixEngagesOnlyForTheRightRouteAndFlag(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			keys := validKeys()
-			keys.identity.PrefixToolNames = test.enabled
-
 			var seenBody string
 			var wrapped bool
 			runMiddlewareRequest(t, middlewareRequest{
 				method:   test.method,
 				path:     test.path,
 				headers:  validHeaders(),
-				keys:     keys,
+				keys:     validKeys(),
 				requests: &fakeRequests{},
 				body:     strings.NewReader(toolDeclaration),
 				next: func(c *gin.Context) {
@@ -98,21 +83,21 @@ func TestToolPrefixEngagesOnlyForTheRightRouteAndFlag(t *testing.T) {
 	}
 }
 
-// TestFlaggedResponseIsWrittenBeforeCompletionIsRecorded proves both halves of
-// the wiring at once: the client receives the response with the prefix
-// stripped, and the wrapper's finalization runs before completion, so the
-// request is never recorded complete against a body still held in memory.
-func TestFlaggedResponseIsWrittenBeforeCompletionIsRecorded(t *testing.T) {
+// TestResponseIsWrittenBeforeCompletionIsRecorded proves both halves of the
+// wiring at once: the client receives the response with the prefix stripped,
+// and the wrapper's finalization runs before completion, so the request is
+// never recorded complete against a body still held in memory.
+func TestResponseIsWrittenBeforeCompletionIsRecorded(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	requests := &completionOrder{fakeRequests: &fakeRequests{}, recorder: recorder}
 
-	runFlaggedGeneration(t, requests, recorder, func(c *gin.Context) {
+	runGeneration(t, requests, recorder, func(c *gin.Context) {
 		c.Header("Content-Type", "application/json")
 		_, _ = c.Writer.Write([]byte(toolUseResponse))
 	})
 
 	body := recorder.Body.String()
-	if !strings.Contains(body, `"name":"search_web"`) || strings.Contains(body, "new_search_web") {
+	if !strings.Contains(body, `"name":"search_web"`) || strings.Contains(body, "mcp__llmgw__search_web") {
 		t.Fatalf("client received %s, want the prefix stripped", body)
 	}
 	if requests.bodyAtCompletion != body {
@@ -121,14 +106,13 @@ func TestFlaggedResponseIsWrittenBeforeCompletionIsRecorded(t *testing.T) {
 	}
 }
 
-// TestOversizedFlaggedRequestReturnsThePermit proves the 32 MiB refusal gives
+// TestOversizedToolRequestReturnsThePermit proves the 32 MiB refusal gives
 // the generation permit back. The bridge's capacity is finite and a leaked
 // permit is never recovered, so enough refusals would poison it and stop the
 // service.
-func TestOversizedFlaggedRequestReturnsThePermit(t *testing.T) {
+func TestOversizedToolRequestReturnsThePermit(t *testing.T) {
 	bridge := fixedUsageBridgeCapacity(t, 1)
 	keys := validKeys()
-	keys.identity.PrefixToolNames = true
 
 	var nextCalled bool
 	refused := runMiddlewareRequest(t, middlewareRequest{
@@ -188,9 +172,9 @@ func TestDeclaredOversizedBodyIsRefusedUnread(t *testing.T) {
 	}
 }
 
-// runFlaggedGeneration drives one flagged /v1/messages request through the
-// middleware against a caller-owned recorder and repository.
-func runFlaggedGeneration(
+// runGeneration drives one /v1/messages request through the middleware
+// against a caller-owned recorder and repository.
+func runGeneration(
 	t *testing.T,
 	requests governance.RequestRepository,
 	recorder *httptest.ResponseRecorder,
@@ -201,7 +185,6 @@ func runFlaggedGeneration(
 	bridge := fixedUsageBridge(t)
 	bridge.publishRecord = func(context.Context, sdkusage.Record) {}
 	keys := validKeys()
-	keys.identity.PrefixToolNames = true
 
 	middleware := NewMiddleware(keys, requests, func() time.Time { return fixedTime }, bridge, nil)
 	engine := gin.New()

@@ -25,7 +25,7 @@ func TestStripResponseRoundTripsPrefixRequest(t *testing.T) {
 // TestStripResponseLeavesNonToolUseBlocksUntouched proves a text block that
 // happens to contain the prefix in its prose is never inspected.
 func TestStripResponseLeavesNonToolUseBlocksUntouched(t *testing.T) {
-	payload := []byte(`{"content":[{"type":"text","text":"hello new_search_web"}]}`)
+	payload := []byte(`{"content":[{"type":"text","text":"hello mcp__llmgw__search_web"}]}`)
 	got := StripResponse(payload)
 	if string(got) != string(payload) {
 		t.Fatalf("text block changed: got %s, want %s", got, payload)
@@ -57,7 +57,7 @@ func TestStripResponseMalformedJSONUnchanged(t *testing.T) {
 // prefix, and the trailing delimiter preserved exactly.
 func TestStripStreamEventContentBlockStart(t *testing.T) {
 	event := []byte("event: content_block_start\n" +
-		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"new_search_web","input":{}}}` +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"mcp__llmgw__search_web","input":{}}}` +
 		"\n\n")
 	got := StripStreamEvent(event)
 
@@ -136,4 +136,23 @@ func dataJSON(t *testing.T, event []byte) []byte {
 		t.Fatalf("event has no data: line: %s", event)
 	}
 	return event[start:end]
+}
+
+// TestStripResponseStripsOnlyPrefixedNames proves one response carrying both
+// kinds of name comes back correctly: the prefixed tool_use loses the prefix,
+// and the client's own MCP tool, which PrefixRequest never renamed, reaches
+// the client under the exact name it declared.
+func TestStripResponseStripsOnlyPrefixedNames(t *testing.T) {
+	payload := []byte(`{"type":"message","content":[
+		{"type":"tool_use","name":"mcp__llmgw__search_web","input":{}},
+		{"type":"tool_use","name":"mcp__notion__search","input":{}}
+	]}`)
+	got := StripResponse(payload)
+
+	if v := gjson.GetBytes(got, "content.0.name").String(); v != "search_web" {
+		t.Fatalf("content.0.name = %q, want search_web", v)
+	}
+	if v := gjson.GetBytes(got, "content.1.name").String(); v != "mcp__notion__search" {
+		t.Fatalf("content.1.name = %q, want mcp__notion__search unchanged", v)
+	}
 }

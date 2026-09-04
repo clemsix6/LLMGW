@@ -223,7 +223,7 @@ func (m *Middleware) admit(
 		c.Request = c.Request.WithContext(requestContext)
 	}
 	defer m.complete(c, identity)
-	if finalizeResponse := installToolPrefixWriter(c, keyIdentity); finalizeResponse != nil {
+	if finalizeResponse := installToolPrefixWriter(c); finalizeResponse != nil {
 		// Registered after complete so LIFO runs it first: the rewritten response
 		// must be fully on the wire before completion records the status it ended on.
 		defer finalizeResponse()

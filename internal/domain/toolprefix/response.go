@@ -58,8 +58,8 @@ func StripStreamEvent(event []byte) []byte {
 // stripBlockName strips toolNamePrefix from the "name" field of the JSON
 // object found at blockPath, but only when that object's "type" is
 // "tool_use" and its name actually carries the prefix. A name without the
-// prefix — a model naming a tool that was never declared, for instance — is
-// returned unchanged, never truncated or rejected.
+// prefix — one PrefixRequest exempted, or a model naming a tool that was
+// never declared — is returned unchanged, never truncated or rejected.
 func stripBlockName(payload []byte, blockPath string) []byte {
 	if gjson.GetBytes(payload, blockPath+".type").String() != "tool_use" {
 		return payload

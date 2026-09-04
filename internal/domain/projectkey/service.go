@@ -189,7 +189,6 @@ func keyIdentity(key governance.ClientKey) governance.KeyIdentity {
 		ClientKeyID:      key.ID,
 		KeyName:          key.Name,
 		PublicID:         key.PublicID,
-		PrefixToolNames:  key.PrefixToolNames,
 		DefaultEffort:    key.DefaultEffort,
 		RejectToolMarkup: key.RejectToolMarkup,
 	}

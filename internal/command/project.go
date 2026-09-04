@@ -22,8 +22,6 @@ func runProject(ctx context.Context, args []string, streams Streams) error {
 	switch args[0] {
 	case "list":
 		return runProjectList(ctx, args[1:], streams)
-	case "tool-prefix":
-		return runProjectToolPrefix(ctx, args[1:], streams)
 	case "markup-guard":
 		return runProjectMarkupGuard(ctx, args[1:], streams)
 	case "effort":
@@ -33,7 +31,7 @@ func runProject(ctx context.Context, args []string, streams Streams) error {
 	}
 }
 
-// runProjectList emits every project's name, creation time, and tool-name-prefix state.
+// runProjectList emits every project's name, creation time, and settings.
 func runProjectList(ctx context.Context, args []string, streams Streams) error {
 	flags := flag.NewFlagSet("project list", flag.ContinueOnError)
 	flags.SetOutput(streams.Err)
@@ -56,40 +54,6 @@ func runProjectList(ctx context.Context, args []string, streams Streams) error {
 		if err := printProject(streams.Out, project); err != nil {
 			return fmt.Errorf("write project list:\n%w", err)
 		}
-	}
-	return nil
-}
-
-// runProjectToolPrefix enables or disables outbound tool-name namespacing for one existing project.
-// It fails with a clear message rather than creating the project: implicit
-// project creation stays a property of key create alone.
-func runProjectToolPrefix(ctx context.Context, args []string, streams Streams) error {
-	flags := flag.NewFlagSet("project tool-prefix", flag.ContinueOnError)
-	flags.SetOutput(streams.Err)
-	if err := flags.Parse(args); err != nil {
-		return err
-	}
-	if flags.NArg() != 2 {
-		return projectUsage(streams, "project tool-prefix requires NAME and on|off")
-	}
-	name := flags.Arg(0)
-	enabled, ok := parseOnOffState(flags.Arg(1))
-	if !ok {
-		return projectUsage(streams, "project tool-prefix state must be on or off")
-	}
-	_, store, err := openStore(ctx, configPath(streams), streams)
-	if err != nil {
-		return err
-	}
-	defer store.Close()
-	if err := store.SetProjectToolPrefix(ctx, name, enabled); err != nil {
-		if errors.Is(err, postgres.ErrProjectNotFound) {
-			return fmt.Errorf("project %q does not exist", name)
-		}
-		return fmt.Errorf("set project tool prefix:\n%w", err)
-	}
-	if _, err := fmt.Fprintf(streams.Out, "project\t%s\nprefix_tool_names\t%t\n", name, enabled); err != nil {
-		return fmt.Errorf("write project tool prefix:\n%w", err)
 	}
 	return nil
 }
@@ -180,8 +144,8 @@ func parseOnOffState(state string) (enabled bool, ok bool) {
 func printProject(output io.Writer, project governance.Project) error {
 	_, err := fmt.Fprintf(
 		output,
-		"name\t%s\ncreated_at\t%s\nprefix_tool_names\t%t\ndefault_effort\t%s\nreject_tool_markup\t%t\n",
-		project.Name, project.CreatedAt.UTC().Format(time.RFC3339), project.PrefixToolNames,
+		"name\t%s\ncreated_at\t%s\ndefault_effort\t%s\nreject_tool_markup\t%t\n",
+		project.Name, project.CreatedAt.UTC().Format(time.RFC3339),
 		printedEffort(project.DefaultEffort), project.RejectToolMarkup,
 	)
 	return err
@@ -198,6 +162,6 @@ func printedEffort(level string) string {
 
 // projectUsage writes a short usage line for a leaf-parser error.
 func projectUsage(streams Streams, message string) error {
-	fmt.Fprintln(streams.Err, "usage: project {list|tool-prefix|markup-guard|effort}")
+	fmt.Fprintln(streams.Err, "usage: project {list|markup-guard|effort}")
 	return fmt.Errorf("%s", message)
 }

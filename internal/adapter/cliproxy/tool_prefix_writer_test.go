@@ -10,17 +10,17 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// toolUseResponse is one complete Anthropic response carrying a namespaced
+// toolUseResponse is one complete Anthropic response carrying a prefixed
 // tool call.
 const toolUseResponse = `{"id":"msg_1","type":"message","role":"assistant",` +
-	`"content":[{"type":"tool_use","id":"tu_1","name":"new_search_web","input":{"q":"go"}}],` +
+	`"content":[{"type":"tool_use","id":"tu_1","name":"mcp__llmgw__search_web","input":{"q":"go"}}],` +
 	`"stop_reason":"tool_use"}`
 
-// toolUseEvent is one complete server-sent event announcing a namespaced tool
+// toolUseEvent is one complete server-sent event announcing a prefixed tool
 // call, delimiter included.
 const toolUseEvent = "event: content_block_start\n" +
 	`data: {"type":"content_block_start","index":0,` +
-	`"content_block":{"type":"tool_use","id":"tu_1","name":"new_search_web","input":{}}}` +
+	`"content_block":{"type":"tool_use","id":"tu_1","name":"mcp__llmgw__search_web","input":{}}}` +
 	"\n\n"
 
 // wrappedWriter installs a tool-prefix writer over the real gin response
@@ -60,7 +60,7 @@ func TestBufferedModeRewritesTheBodyAndItsLength(t *testing.T) {
 			writer.finalize()
 
 			body := recorder.Body.String()
-			if !strings.Contains(body, `"name":"search_web"`) || strings.Contains(body, "new_search_web") {
+			if !strings.Contains(body, `"name":"search_web"`) || strings.Contains(body, "mcp__llmgw__search_web") {
 				t.Fatalf("finalized body = %s, want the prefix stripped", body)
 			}
 			length := recorder.Result().Header.Get("Content-Length")
@@ -86,7 +86,7 @@ func TestBufferedModeKeepsLeadingKeepAliveFrames(t *testing.T) {
 	if !strings.HasPrefix(body, "\n\n") {
 		t.Fatalf("body = %q, want the keep-alive frames preserved", body)
 	}
-	if !strings.Contains(body, `"name":"search_web"`) || strings.Contains(body, "new_search_web") {
+	if !strings.Contains(body, `"name":"search_web"`) || strings.Contains(body, "mcp__llmgw__search_web") {
 		t.Fatalf("body = %s, want the prefix stripped behind the keep-alive", body)
 	}
 }
@@ -100,7 +100,7 @@ func TestStreamingModeRewritesEachCompleteEvent(t *testing.T) {
 
 	_, _ = c.Writer.Write([]byte(toolUseEvent))
 	whole := recorder.Body.String()
-	if !strings.Contains(whole, `"name":"search_web"`) || strings.Contains(whole, "new_search_web") {
+	if !strings.Contains(whole, `"name":"search_web"`) || strings.Contains(whole, "mcp__llmgw__search_web") {
 		t.Fatalf("whole event = %q, want the prefix stripped", whole)
 	}
 

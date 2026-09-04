@@ -4,11 +4,10 @@ import "time"
 
 // Project identifies a governed project.
 type Project struct {
-	ID              int64     // ID is the database identifier.
-	Name            string    // Name is the unique project name.
-	CreatedAt       time.Time // CreatedAt is the UTC creation time.
-	PrefixToolNames bool      // PrefixToolNames reports whether outbound tool names are namespaced for this project.
-	DefaultEffort   string    // DefaultEffort is the project's default Anthropic thinking effort, empty meaning none.
+	ID            int64     // ID is the database identifier.
+	Name          string    // Name is the unique project name.
+	CreatedAt     time.Time // CreatedAt is the UTC creation time.
+	DefaultEffort string    // DefaultEffort is the project's default Anthropic thinking effort, empty meaning none.
 	// RejectToolMarkup reports whether non-streamed responses carrying leaked
 	// tool-call markup are refused for this project.
 	RejectToolMarkup bool
@@ -16,18 +15,17 @@ type Project struct {
 
 // ClientKey is a persisted project-scoped client credential.
 type ClientKey struct {
-	ID              int64      // ID is the database identifier.
-	ProjectID       int64      // ProjectID identifies the owning project.
-	ProjectName     string     // ProjectName is the owning project's unique name.
-	Name            string     // Name is the operator-facing key name.
-	PublicID        string     // PublicID is the non-secret lookup identifier.
-	Digest          []byte     // Digest is the 32-byte digest of the key secret.
-	CreatedAt       time.Time  // CreatedAt is the UTC creation time.
-	ExpiresAt       *time.Time // ExpiresAt is the optional UTC expiry time.
-	RevokedAt       *time.Time // RevokedAt is the optional UTC revocation time.
-	LastUsedAt      *time.Time // LastUsedAt is the optional UTC last-use time.
-	PrefixToolNames bool       // PrefixToolNames reports whether the owning project namespaces outbound tool names.
-	DefaultEffort   string     // DefaultEffort is the owning project's default Anthropic thinking effort, empty meaning none.
+	ID            int64      // ID is the database identifier.
+	ProjectID     int64      // ProjectID identifies the owning project.
+	ProjectName   string     // ProjectName is the owning project's unique name.
+	Name          string     // Name is the operator-facing key name.
+	PublicID      string     // PublicID is the non-secret lookup identifier.
+	Digest        []byte     // Digest is the 32-byte digest of the key secret.
+	CreatedAt     time.Time  // CreatedAt is the UTC creation time.
+	ExpiresAt     *time.Time // ExpiresAt is the optional UTC expiry time.
+	RevokedAt     *time.Time // RevokedAt is the optional UTC revocation time.
+	LastUsedAt    *time.Time // LastUsedAt is the optional UTC last-use time.
+	DefaultEffort string     // DefaultEffort is the owning project's default Anthropic thinking effort, empty meaning none.
 	// RejectToolMarkup reports whether the owning project refuses non-streamed
 	// responses carrying leaked tool-call markup.
 	RejectToolMarkup bool
@@ -48,13 +46,12 @@ type KeyInfo struct {
 
 // KeyIdentity is the authenticated project identity carried by a request.
 type KeyIdentity struct {
-	ProjectID       int64  // ProjectID identifies the authenticated project.
-	ProjectName     string // ProjectName is the authenticated project's unique name.
-	ClientKeyID     int64  // ClientKeyID identifies the authenticated client key.
-	KeyName         string // KeyName is the operator-facing key name.
-	PublicID        string // PublicID is the key's non-secret lookup identifier.
-	PrefixToolNames bool   // PrefixToolNames reports whether the authenticated project namespaces outbound tool names.
-	DefaultEffort   string // DefaultEffort is the authenticated project's default Anthropic thinking effort, empty meaning none.
+	ProjectID     int64  // ProjectID identifies the authenticated project.
+	ProjectName   string // ProjectName is the authenticated project's unique name.
+	ClientKeyID   int64  // ClientKeyID identifies the authenticated client key.
+	KeyName       string // KeyName is the operator-facing key name.
+	PublicID      string // PublicID is the key's non-secret lookup identifier.
+	DefaultEffort string // DefaultEffort is the authenticated project's default Anthropic thinking effort, empty meaning none.
 	// RejectToolMarkup reports whether the authenticated project refuses
 	// non-streamed responses carrying leaked tool-call markup.
 	RejectToolMarkup bool
