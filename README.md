@@ -55,6 +55,14 @@ create`, `key rotate`, `auth login`, and `auth import-legacy` take up to five
 seconds longer to exit — the command still succeeds, and the delivery failure
 is only a warning on stderr.
 
+The `llmgw` block of the shared YAML holds the rest. `postgres-dsn-env`,
+`key-pepper-env`, and `discord-webhook-url-env` name the environment variables
+that carry those secrets rather than the secrets themselves, and default to the
+`.env.example` names above. `usage-retention-days` keeps usage history for that
+many whole days (default 35, minimum 2, which is what the daily budget window
+needs). `usage-outstanding-capacity` bounds the admitted generations still
+waiting for their usage record (default 64, maximum 1024).
+
 Start the single service; migrations run during startup:
 
 ```sh
@@ -91,7 +99,7 @@ llmgw key revoke KEY_ID
 `key create` prints the plaintext project key once. Store it in the deployed
 client's secret store. Create one key per deployed client; a project can own
 many keys. A key is mandatory for every generation and metadata request,
-including traffic arriving through Cloudflare Tunnel.
+whatever network layer sits in front of it.
 
 Use either standard header form (but not conflicting values):
 
@@ -103,15 +111,43 @@ curl http://127.0.0.1:8088/v1/chat/completions \
   -H 'x-api-key: LLMGW_PROJECT_KEY'
 ```
 
-Claude Code, OpenCode, and Hermes all use the same LLMGW base URL and their
-normal API-key setting; set that API-key value to the project key issued for
-that deployed client. The embedded SDK serves its supported provider protocol
-routes, including Anthropic Messages, OpenAI Chat Completions/Responses, and
-Gemini where configured.
+Claude Code, OpenCode, and Hermes Agent all use the same LLMGW base URL and
+their normal API-key setting; set that API-key value to the project key issued
+for that deployed client. The embedded SDK serves its supported provider
+protocol routes, including Anthropic Messages, OpenAI Chat
+Completions/Responses, and Gemini where configured.
+
+## Projects
+
+A project is created by issuing its first key; there is no separate create
+command. Beyond its keys, a project carries two settings the gateway applies to
+every request it authenticates:
+
+```sh
+llmgw project list
+llmgw project effort analytics xhigh
+llmgw project markup-guard analytics on
+```
+
+`project list` prints each project's name, creation time, default effort, and
+markup-guard state.
+
+`project effort NAME low|medium|high|xhigh|max|none` sets a default Anthropic
+thinking effort, injected as `output_config.effort` into every generation
+request that names none of its own. A request that already carries an effort is
+left alone, whatever its value, as is one whose client disabled thinking —
+Anthropic refuses a level above `high` beside disabled thinking. `none` removes
+the default.
+
+`project markup-guard NAME on|off` makes the gateway refuse a non-streamed
+generation response whose tool-call inputs carry leaked function-call markup,
+turning it into a retryable upstream error rather than a corrupted success the
+client consumes. Streamed responses pass through untouched: their tool inputs
+arrive as partial JSON deltas no complete-document scan can screen.
 
 ## Budgets and usage
 
-Create a project by issuing its first key, then manage its project-wide limits:
+Manage a project's limits, then read back what it consumed:
 
 ```sh
 llmgw budget set analytics --dimension calls --window day --max 1000 --action block
@@ -143,31 +179,39 @@ to match the provider and desired latency. Preserve the required security
 settings in the example: remote management, the control panel, home, and pprof
 must remain disabled.
 
-## Network safety and rollback
+## What the gateway rewrites on Anthropic requests
 
-Cloudflare Tunnel is the recommended way to publish LLMGW, but it is a network
-control rather than client authentication: project keys remain mandatory. If
-you expose LLMGW directly, put TLS termination in front of it and restrict the
-listener/firewall as appropriate. Do not publish the Compose port on a routable
-host interface without that protection.
+Two routes are rewritten on their way upstream: `POST /v1/messages` and `POST
+/v1/messages/count_tokens`, both in the Anthropic Messages format. Every other
+protocol route the embedded SDK serves passes through untouched.
 
-Before the first migration-0010 upgrade, make and test a restorable PostgreSQL
-backup while the old service is stopped. Also snapshot the persistent
-CLIProxyAPI auth directory and retain the prior image tag, `config.yaml`, and
-`.env`. Migration 0010 renames the historical tables to
-`legacy_usage_event`, `legacy_budget_limit`, and `legacy_model_price`, and
-drops `reservation`; therefore an image-only rollback after 0010 is
-impossible.
+- **Tool names.** Every client-defined tool — a declaration with no `type`,
+  or with `type: "custom"` — is sent upstream as `mcp__llmgw__<name>`,
+  consistently in `tools[]`, in `tool_choice`, and in the `tool_use` blocks
+  replayed from the conversation history; the original name is restored in
+  responses, streaming included, so clients never see the prefix. Tools
+  Anthropic itself defines, recognised by their `type` and never by their name,
+  names already starting with `mcp__`, and names longer than 52 characters are
+  left as they are. The reason is the prompt cache: on OAuth credentials the
+  embedded SDK rewrites client tool names with a per-request value, which
+  changes the very start of the prompt on every call and defeats the provider's
+  cache. A name already in the MCP shape is forwarded verbatim, so the cached
+  prefix stays stable. `count_tokens` receives the same rewrite, so the count
+  matches the payload actually sent. Source: `internal/domain/toolprefix`.
+- **Context editing.** A generation payload that carries no
+  `context_management` gets `{"edits": []}`. Left absent, the field is filled
+  in by the SDK with a thinking-clearing strategy of its own, which rewrites
+  the conversation prefix on every turn and makes the cache unusable. A client
+  that sends its own `context_management` keeps it. Source:
+  `internal/domain/contextedit/claim.go`.
+- **Default effort.** The project's default thinking effort, injected as
+  described above. Source: `internal/domain/effort`.
 
-To return to the previous image, first route traffic away and stop every LLMGW
-instance. Restore the tested pre-0010 PostgreSQL backup before starting the
-previous image. Restore the matching auth-directory snapshot as well, or
-explicitly verify and account for every auth-file change made since the
-snapshot. Only after both state stores are compatible should you select the
-prior image tag and start the old service. `llmgw auth import-legacy` reads
-historical `oauth_token` rows without modifying them and writes compatible
-provider-auth files into the persistent auth directory; review its
-per-credential status and use `auth login` for entries marked `needs-login`.
+Session affinity is the same concern one layer down. `config.example.yaml`
+enables `routing.session-affinity` so a conversation sticks to one upstream
+credential: the provider's prompt cache lives per account, and a multi-turn
+agent loop that round-robins across a pool re-pays its whole context. Keep it
+enabled.
 
 ## CI and live verification
 

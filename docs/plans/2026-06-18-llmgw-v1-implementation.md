@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use superpowers:subagent-driven-development —
 > **one implementation subagent per BATCH** (not per task), with a review subagent between
-> batches that holds BOTH the spec and this plan in context (TrueWallet convention). Steps use
+> batches that holds BOTH the spec and this plan in context (house convention). Steps use
 > checkbox (`- [ ]`) syntax.
 
 **Goal:** Build LLMGW V1 — a local LLM gateway that proxies the Claude Max OAuth backend, tracks
@@ -25,7 +25,7 @@ other features are implemented and prod-ready at the end of this plan.
 
 ---
 
-## Batch cadence (TrueWallet convention)
+## Batch cadence (house convention)
 
 - Each batch is **1-3 coherent tasks**. **Wiring (cmd/llmgw) goes IN each batch** so every batch
   leaves the build green and its own tests passing.
@@ -228,7 +228,7 @@ in the store; modify `cmd/llmgw/main.go` (seed tokens from config into `oauth_to
   mirroring clewdr `drop_empty_system` + `strip_ephemeral_scope_from_system`
   (`/tmp/clewdr-src/src/middleware/claude/request.rs`): **drop whitespace-only system text blocks**
   and **strip `cache_control` ephemeral `scope` from system blocks**. Consumers using prompt caching
-  (the TrueWallet Processor) send these and Anthropic 400s otherwise. Unit test: a `system` array
+  (a background processor) send these and Anthropic 400s otherwise. Unit test: a `system` array
   with a whitespace-only text block + a block whose `cache_control` carries `scope` → after
   normalization the empty block is dropped and `scope` is stripped (the rest of `cache_control` kept).
 

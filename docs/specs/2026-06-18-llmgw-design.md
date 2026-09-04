@@ -13,7 +13,7 @@ providers and any consuming program.
                               ⇅
                      [ LLMGW : this service ]
                               ⇅
-        [ any consumer: TrueWallet Processor, agents, other projects ]
+        [ any consumer: background processors, agents, other projects ]
 ```
 
 It exists to:
@@ -26,11 +26,12 @@ It exists to:
 - **Replace clewdr** for the Anthropic/Claude-Max path with a maintained Go
   implementation that is not blocked by Anthropic's anti-abuse (see §9).
 
-**Origin:** TrueWallet's Processor drove all LLM traffic through clewdr (Claude Max via
-OAuth). Anthropic began returning `429 rate_limit_error` to clewdr's requests; a full
-investigation (§9) showed the **account is healthy** and the request body is fine — the
-trigger is clewdr's **browser-TLS impersonation fingerprint**, compounded by clewdr's
-**1-hour cooldown on a no-reset 429** which turns each rejection into a long outage.
+**Origin:** The first consumer's background processor drove all LLM traffic through
+clewdr (Claude Max via OAuth). Anthropic began returning `429 rate_limit_error` to
+clewdr's requests; a full investigation (§9) showed the **account is healthy** and the
+request body is fine — the trigger is clewdr's **browser-TLS impersonation
+fingerprint**, compounded by clewdr's **1-hour cooldown on a no-reset 429** which
+turns each rejection into a long outage.
 LLMGW fixes both: a normal Go HTTP client (no flagged fingerprint) and budget-based
 pre-call rate control instead of a blunt cooldown.
 
@@ -257,7 +258,7 @@ out-of-band for Anthropic; the API-key / OpenRouter providers are the durable ex
 
 ## 10. Phasing & build order
 
-- **V1** (resolves TrueWallet's outage, removes clewdr), built in risk-reducing slices:
+- **V1** (resolves the first consumer's outage, removes clewdr), built in risk-reducing slices:
   1. **Passthrough proxy**: `/v1/messages` (non-streaming + streaming) → Claude Max OAuth,
      single account, spoof + single-flight refresh. Kills clewdr / ends the outage.
   2. **Metering**: `usage_event` recording + `model_price`.
@@ -325,4 +326,4 @@ cover pure budget arithmetic (window boundaries, mixed dimensions) without netwo
 ## 12. Open questions
 
 - Listen port + exact env var names (`ANTHROPIC_OAUTH_REFRESH_TOKENS` seed, Postgres DSN).
-- Deploy mechanics alongside TrueWallet (compose entry, migration application on deploy).
+- Deploy mechanics alongside the first consumer (compose entry, migration application on deploy).

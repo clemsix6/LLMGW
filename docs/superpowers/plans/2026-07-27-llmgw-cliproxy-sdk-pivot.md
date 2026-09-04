@@ -517,13 +517,13 @@ Add `newGovernanceStore(t)` in `governance_test_helpers_test.go`; it starts Post
 The test must apply migrations `0001` through `0009`, insert:
 
 ```sql
-INSERT INTO project (name) VALUES ('truewallet');
+INSERT INTO project (name) VALUES ('analytics');
 INSERT INTO budget_limit (project_id, tag, dimension, "window", max_value, action)
 VALUES
-  ((SELECT id FROM project WHERE name='truewallet'), NULL, 'calls', 'hour', 50, 'block'),
-  ((SELECT id FROM project WHERE name='truewallet'), 'worker-a', 'calls', 'hour', 5, 'block');
+  ((SELECT id FROM project WHERE name='analytics'), NULL, 'calls', 'hour', 50, 'block'),
+  ((SELECT id FROM project WHERE name='analytics'), 'worker-a', 'calls', 'hour', 5, 'block');
 INSERT INTO usage_event (project_id, tag, model, provider, status)
-VALUES ((SELECT id FROM project WHERE name='truewallet'), 'worker-a', 'legacy-model', 'claude_max', 'ok');
+VALUES ((SELECT id FROM project WHERE name='analytics'), 'worker-a', 'legacy-model', 'claude_max', 'ok');
 ```
 
 Then apply `0010` and assert:
@@ -533,7 +533,7 @@ legacy_usage_event contains 1 row
 legacy_budget_limit contains 2 rows
 new budget_limit contains only the tag-null row and maps cost_usd to cost
 reservation no longer exists
-project still contains truewallet
+project still contains analytics
 provider, route, and oauth_token still exist
 new tables and CHECK constraints accept every declared governance enum
 ```
@@ -1653,19 +1653,19 @@ no command starts or calls a remote management API
 Against ephemeral PostgreSQL, drive:
 
 ```text
-key create truewallet --name server-1
-key list truewallet
+key create analytics --name server-1
+key list analytics
 key list
-key create truewallet --name ephemeral --expires 24h
+key create analytics --name ephemeral --expires 24h
 key rotate KEY_ID --overlap 24h
 key revoke KEY_ID
-budget set truewallet --dimension calls --window hour --max 50 --action block
-budget list truewallet
+budget set analytics --dimension calls --window hour --max 50 --action block
+budget list analytics
 budget list
 budget delete LIMIT_ID
-usage show truewallet --since 24h --by key
-usage show truewallet --since 24h --by model
-usage show truewallet --since 24h --by provider
+usage show analytics --since 24h --by key
+usage show analytics --since 24h --by model
+usage show analytics --since 24h --by provider
 usage resolve REQUEST_UUID --assume-zero
 ```
 
@@ -2193,7 +2193,7 @@ llmgw usage show/resolve
 Authorization Bearer and x-api-key examples
 one key per deployed client, many keys per project
 Claude Code/OpenCode/Hermes use the same base URL plus their normal API-key setting
-Cloudflare Tunnel is recommended but project keys remain mandatory
+A tunnel or reverse proxy may sit in front, but project keys remain mandatory
 direct exposure requires TLS termination
 calls are exact; token/cost budgets stop after crossing
 notional subscription cost is not an invoice

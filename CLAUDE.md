@@ -49,8 +49,8 @@ PostgreSQL is mandatory; there is no fallback store.
 ## Exposed surfaces (CRUCIAL)
 
 - Every client request carries an LLMGW project key, accepted as `Authorization:
-  Bearer …` or `x-api-key`. It stays mandatory behind Cloudflare, and direct
-  exposure requires TLS termination in front.
+  Bearer …` or `x-api-key`. It stays mandatory whatever network layer sits in
+  front, and direct exposure requires TLS termination in front.
 - Do not add another inbound management or API-key surface: remote management,
   control panel, home, and pprof remain disabled.
 
