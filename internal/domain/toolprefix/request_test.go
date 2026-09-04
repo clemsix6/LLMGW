@@ -2,6 +2,7 @@ package toolprefix
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/tidwall/gjson"
@@ -12,7 +13,7 @@ func TestPrefixRequestToolDeclarations(t *testing.T) {
 	payload := []byte(`{"tools":[{"name":"search_web"},{"name":"read_file"}]}`)
 	got := PrefixRequest(payload)
 
-	want := []string{"new_search_web", "new_read_file"}
+	want := []string{"mcp__llmgw__search_web", "mcp__llmgw__read_file"}
 	for i, w := range want {
 		if name := gjson.GetBytes(got, fmt.Sprintf("tools.%d.name", i)).String(); name != w {
 			t.Fatalf("tools.%d.name = %q, want %q", i, name, w)
@@ -35,8 +36,8 @@ func TestPrefixRequestSkipsToolWithoutName(t *testing.T) {
 func TestPrefixRequestToolChoice(t *testing.T) {
 	payload := []byte(`{"tool_choice":{"type":"tool","name":"search_web"}}`)
 	got := PrefixRequest(payload)
-	if name := gjson.GetBytes(got, "tool_choice.name").String(); name != "new_search_web" {
-		t.Fatalf("tool_choice.name = %q, want new_search_web", name)
+	if name := gjson.GetBytes(got, "tool_choice.name").String(); name != "mcp__llmgw__search_web" {
+		t.Fatalf("tool_choice.name = %q, want mcp__llmgw__search_web", name)
 	}
 }
 
@@ -59,8 +60,8 @@ func TestPrefixRequestToolChoiceIgnoresNonToolType(t *testing.T) {
 func TestPrefixRequestHistoryToolUse(t *testing.T) {
 	payload := []byte(`{"messages":[{"role":"assistant","content":[{"type":"tool_use","name":"search_web","input":{}}]}]}`)
 	got := PrefixRequest(payload)
-	if name := gjson.GetBytes(got, "messages.0.content.0.name").String(); name != "new_search_web" {
-		t.Fatalf("messages.0.content.0.name = %q, want new_search_web", name)
+	if name := gjson.GetBytes(got, "messages.0.content.0.name").String(); name != "mcp__llmgw__search_web" {
+		t.Fatalf("messages.0.content.0.name = %q, want mcp__llmgw__search_web", name)
 	}
 }
 
@@ -97,13 +98,13 @@ func TestPrefixRequestAllThreeLocationsTogether(t *testing.T) {
 	}`)
 	got := PrefixRequest(payload)
 
-	if v := gjson.GetBytes(got, "tools.0.name").String(); v != "new_search_web" {
+	if v := gjson.GetBytes(got, "tools.0.name").String(); v != "mcp__llmgw__search_web" {
 		t.Fatalf("tools.0.name = %q", v)
 	}
-	if v := gjson.GetBytes(got, "tool_choice.name").String(); v != "new_search_web" {
+	if v := gjson.GetBytes(got, "tool_choice.name").String(); v != "mcp__llmgw__search_web" {
 		t.Fatalf("tool_choice.name = %q", v)
 	}
-	if v := gjson.GetBytes(got, "messages.0.content.0.name").String(); v != "new_search_web" {
+	if v := gjson.GetBytes(got, "messages.0.content.0.name").String(); v != "mcp__llmgw__search_web" {
 		t.Fatalf("messages.0.content.0.name = %q", v)
 	}
 	if v := gjson.GetBytes(got, "messages.1.content.0.type").String(); v != "tool_result" {
@@ -138,11 +139,11 @@ func TestPrefixRequestSeveralToolsAndHistoryBlocks(t *testing.T) {
 	}`)
 	got := PrefixRequest(payload)
 
-	assertToolNames(t, got, []string{"new_alpha", "new_beta", "new_gamma"})
+	assertToolNames(t, got, []string{"mcp__llmgw__alpha", "mcp__llmgw__beta", "mcp__llmgw__gamma"})
 	assertHistoryNames(t, got, map[string]string{
-		"messages.0.content.0.name": "new_alpha",
-		"messages.0.content.2.name": "new_beta",
-		"messages.2.content.0.name": "new_gamma",
+		"messages.0.content.0.name": "mcp__llmgw__alpha",
+		"messages.0.content.2.name": "mcp__llmgw__beta",
+		"messages.2.content.0.name": "mcp__llmgw__gamma",
 	})
 	if gjson.GetBytes(got, "messages.0.content.1.name").Exists() {
 		t.Fatalf("text block gained a name field")
@@ -175,8 +176,8 @@ func assertHistoryNames(t *testing.T, payload []byte, want map[string]string) {
 }
 
 // TestPrefixRequestLeavesAnthropicToolsAlone proves a tool Anthropic defines
-// keeps the exact name upstream requires, while a project declaration in the
-// same payload is still namespaced.
+// keeps the exact name upstream requires, while a client declaration in the
+// same payload is still prefixed.
 func TestPrefixRequestLeavesAnthropicToolsAlone(t *testing.T) {
 	payload := []byte(`{"tools":[
 		{"type":"web_search_20260209","name":"web_search"},
@@ -190,12 +191,12 @@ func TestPrefixRequestLeavesAnthropicToolsAlone(t *testing.T) {
 		"web_search",
 		"bash",
 		"str_replace_based_edit_tool",
-		"new_search_web",
+		"mcp__llmgw__search_web",
 	})
 }
 
 // TestPrefixRequestPrefixesCustomTypedTool proves the explicit "custom" type,
-// which the Anthropic Messages API accepts on a project's own declaration, is
+// which the Anthropic Messages API accepts on a client's own declaration, is
 // renamed exactly like the type-less shape.
 func TestPrefixRequestPrefixesCustomTypedTool(t *testing.T) {
 	payload := []byte(`{"tools":[
@@ -203,11 +204,11 @@ func TestPrefixRequestPrefixesCustomTypedTool(t *testing.T) {
 	]}`)
 	got := PrefixRequest(payload)
 
-	assertToolNames(t, got, []string{"new_search_web"})
+	assertToolNames(t, got, []string{"mcp__llmgw__search_web"})
 }
 
 // TestPrefixRequestSameNameDiscriminatedByType proves the discriminating case:
-// a project tool named bash and Anthropic's own bash declared in one payload
+// a client tool named bash and Anthropic's own bash declared in one payload
 // are told apart by their type, not by their shared name.
 func TestPrefixRequestSameNameDiscriminatedByType(t *testing.T) {
 	payload := []byte(`{"tools":[
@@ -216,11 +217,11 @@ func TestPrefixRequestSameNameDiscriminatedByType(t *testing.T) {
 	]}`)
 	got := PrefixRequest(payload)
 
-	assertToolNames(t, got, []string{"new_bash", "bash"})
+	assertToolNames(t, got, []string{"mcp__llmgw__bash", "bash"})
 }
 
 // TestPrefixRequestToolChoiceFollowsDeclaration proves a forced choice is
-// rewritten to match the declaration it names — prefixed for a project tool,
+// rewritten to match the declaration it names — prefixed for a client tool,
 // left alone for an Anthropic-defined one — so the two never disagree.
 func TestPrefixRequestToolChoiceFollowsDeclaration(t *testing.T) {
 	for _, testCase := range exemptionCases() {
@@ -270,9 +271,9 @@ type exemptionCase struct {
 func exemptionCases() []exemptionCase {
 	return []exemptionCase{
 		{
-			name:        "project tool",
+			name:        "client tool",
 			declaration: `{"name":"bash","input_schema":{"type":"object"}}`,
-			want:        "new_bash",
+			want:        "mcp__llmgw__bash",
 		},
 		{
 			name:        "anthropic tool",
@@ -310,5 +311,67 @@ func TestPrefixRequestAbsentFieldsSkipped(t *testing.T) {
 	got := PrefixRequest(payload)
 	if string(got) != string(payload) {
 		t.Fatalf("empty object payload changed: got %s, want %s", got, payload)
+	}
+}
+
+// TestPrefixRequestLeavesMCPNamesAlone proves a name that already carries the
+// MCP marker — a client's own MCP tool, which the embedded SDK forwards
+// verbatim — is untouched at all three locations, while a plain name declared
+// in the same payload is still prefixed.
+func TestPrefixRequestLeavesMCPNamesAlone(t *testing.T) {
+	payload := []byte(`{
+		"tools":[
+			{"name":"mcp__notion__search","input_schema":{"type":"object"}},
+			{"name":"search_web","input_schema":{"type":"object"}}
+		],
+		"tool_choice":{"type":"tool","name":"mcp__notion__search"},
+		"messages":[{"role":"assistant","content":[
+			{"type":"tool_use","name":"mcp__notion__search","input":{}},
+			{"type":"tool_use","name":"search_web","input":{}}
+		]}]
+	}`)
+	got := PrefixRequest(payload)
+
+	assertToolNames(t, got, []string{"mcp__notion__search", "mcp__llmgw__search_web"})
+	assertHistoryNames(t, got, map[string]string{
+		"tool_choice.name":          "mcp__notion__search",
+		"messages.0.content.0.name": "mcp__notion__search",
+		"messages.0.content.1.name": "mcp__llmgw__search_web",
+	})
+}
+
+// TestPrefixRequestLengthBoundary proves the boundary the embedded SDK
+// enforces: a name the prefix lands exactly on the 64-character limit is
+// prefixed, and the next character longer is left alone at all three
+// locations, since prefixing it would produce a name the SDK renames anyway.
+func TestPrefixRequestLengthBoundary(t *testing.T) {
+	tests := []struct {
+		name   string
+		length int
+		want   string
+	}{
+		{name: "longest prefixable name", length: 52, want: toolNamePrefix + strings.Repeat("a", 52)},
+		{name: "one character too long", length: 53, want: strings.Repeat("a", 53)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			original := strings.Repeat("a", test.length)
+			payload := []byte(fmt.Sprintf(`{
+				"tools":[{"name":%q,"input_schema":{"type":"object"}}],
+				"tool_choice":{"type":"tool","name":%q},
+				"messages":[{"role":"assistant","content":[{"type":"tool_use","name":%q,"input":{}}]}]
+			}`, original, original, original))
+			got := PrefixRequest(payload)
+
+			assertToolNames(t, got, []string{test.want})
+			assertHistoryNames(t, got, map[string]string{
+				"tool_choice.name":          test.want,
+				"messages.0.content.0.name": test.want,
+			})
+			if len(test.want) > maxToolNameLength {
+				t.Fatalf("expectation %q is itself past the %d-character limit", test.want, maxToolNameLength)
+			}
+		})
 	}
 }

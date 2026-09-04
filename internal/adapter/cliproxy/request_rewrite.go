@@ -24,7 +24,7 @@ const maxRewriteBody = 32 << 20
 // it. A zero value means nothing applies, which is the case for every request
 // that is not a generation.
 type requestRewrite struct {
-	prefixToolNames   bool   // prefixToolNames namespaces the tool names the payload declares.
+	prefixToolNames   bool   // prefixToolNames rewrites the tool names the payload declares.
 	effortLevel       string // effortLevel is the thinking effort to inject, empty meaning none.
 	claimContextEdits bool   // claimContextEdits keeps context editing with the caller.
 }
@@ -48,11 +48,11 @@ func (r requestRewrite) apply(payload []byte) []byte {
 	return effort.Apply(payload, r.effortLevel)
 }
 
-// resolveRequestRewrite decides what the authenticated project asks of this
-// request. The tool-name rewrite covers both Anthropic payload routes, since
-// count_tokens must count the payload actually sent; the effort injection and
-// the context-editing claim cover generation alone — effort moves output tokens
-// and cannot move the count count_tokens answers with, and only a generation
+// resolveRequestRewrite decides what this request needs. The tool-name rewrite
+// applies to every project on both Anthropic payload routes, since count_tokens
+// must count the payload actually sent; the effort injection and the
+// context-editing claim cover generation alone — effort moves output tokens and
+// cannot move the count count_tokens answers with, and only a generation
 // carries a prompt cache to protect.
 func resolveRequestRewrite(
 	identity governance.KeyIdentity,
@@ -62,8 +62,7 @@ func resolveRequestRewrite(
 		return requestRewrite{}
 	}
 	rewrite := requestRewrite{}
-	if identity.PrefixToolNames &&
-		(request.URL.Path == messagesPath || request.URL.Path == countTokensPath) {
+	if request.URL.Path == messagesPath || request.URL.Path == countTokensPath {
 		rewrite.prefixToolNames = true
 	}
 	if request.URL.Path == messagesPath {

@@ -16,14 +16,15 @@ import (
 const plainGeneration = `{"model":"claude-opus-5","messages":[]}`
 
 // TestRequestRewriteRouteEligibility proves each transformation reaches its own
-// routes: the tool-name rewrite covers both Anthropic payload routes, while the
-// effort injection stops at generation, and so does the context-editing claim:
+// routes: the tool-name rewrite covers both Anthropic payload routes, for every
+// project, while the effort injection stops at generation, and so does the
+// context-editing claim:
 // count_tokens must count the payload the client sent, and a field the gateway
 // added would move that count. count_tokens is answered locally and issues no
 // upstream call, so the eligibility predicate is the only place those
 // exclusions have an observable.
 func TestRequestRewriteRouteEligibility(t *testing.T) {
-	identity := governance.KeyIdentity{PrefixToolNames: true, DefaultEffort: "high"}
+	identity := governance.KeyIdentity{DefaultEffort: "high"}
 	tests := []struct {
 		name       string
 		method     string
@@ -167,13 +168,13 @@ func assertClientFieldsIntact(t *testing.T, seenBody, clientBody string) {
 	}
 }
 
-// TestOneBodyReadCarriesBothTransformations proves a project that enabled both
-// settings gets both applied to a single request, which is the property the
-// generalized rewrite exists for: two independent rewrites would each read the
-// body, and the second would read the one the first had already consumed.
+// TestOneBodyReadCarriesBothTransformations proves a project carrying a default
+// effort gets it applied alongside the tool-name rewrite in a single request,
+// which is the property the generalized rewrite exists for: two independent
+// rewrites would each read the body, and the second would read the one the
+// first had already consumed.
 func TestOneBodyReadCarriesBothTransformations(t *testing.T) {
 	keys := validKeys()
-	keys.identity.PrefixToolNames = true
 	keys.identity.DefaultEffort = "high"
 
 	var seenBody string
@@ -191,8 +192,8 @@ func TestOneBodyReadCarriesBothTransformations(t *testing.T) {
 		},
 	})
 
-	if name := gjson.Get(seenBody, "tools.0.name").String(); name != "new_search_web" {
-		t.Fatalf("tools.0.name = %q, want new_search_web", name)
+	if name := gjson.Get(seenBody, "tools.0.name").String(); name != "mcp__llmgw__search_web" {
+		t.Fatalf("tools.0.name = %q, want mcp__llmgw__search_web", name)
 	}
 	if level := gjson.Get(seenBody, "output_config.effort").String(); level != "high" {
 		t.Fatalf("output_config.effort = %q, want high", level)

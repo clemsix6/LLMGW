@@ -2,57 +2,42 @@ package integration
 
 import (
 	"bytes"
-	"context"
 	"net/http"
 	"testing"
 
-	"github.com/clemsix6/LLMGW/internal/domain/governance"
 	"github.com/tidwall/gjson"
 )
 
-// TestToolPrefixOutboundRewrite proves the flag namespaces every outbound
-// location together — declarations, forced choice, and replayed history — and
-// that a project without the flag reaches the stub unmodified. Assertions read
-// the OpenAI chat-completions shape the stub actually receives after
-// translation (spec §11), not the Anthropic shape the client sent.
+// TestToolPrefixOutboundRewrite proves every project's outbound tool names are
+// rewritten at all three locations together — declarations, forced choice, and
+// replayed history — with no opt-in anywhere. Assertions read the OpenAI
+// chat-completions shape the stub actually receives after translation (spec
+// §11), not the Anthropic shape the client sent.
 func TestToolPrefixOutboundRewrite(t *testing.T) {
-	t.Run("flag off leaves tool names untouched", func(t *testing.T) {
-		created := testHarness.createKey(t, "toolprefix-outbound-off")
-		testHarness.Upstream.Enqueue(defaultStubResponse())
-		status, body := gatewayRequest(t, http.MethodPost, "/v1/messages",
-			bytes.NewBufferString(toolPrefixHistoryBody),
-			requestHeaders{authorization: "Bearer " + created.Plaintext})
-		if status != http.StatusOK {
-			t.Fatalf("flag-off status = %d, want 200; body=%s", status, safeBodySummary(body))
-		}
-		assertUpstreamToolNames(t, "search_web")
-	})
-
-	t.Run("flag on namespaces declarations, choice, and history", func(t *testing.T) {
-		created := testHarness.createKey(t, "toolprefix-outbound-on")
-		testHarness.enableToolPrefix(t, created)
-		testHarness.Upstream.Enqueue(defaultStubResponse())
-		status, body := gatewayRequest(t, http.MethodPost, "/v1/messages",
-			bytes.NewBufferString(toolPrefixHistoryBody),
-			requestHeaders{authorization: "Bearer " + created.Plaintext})
-		if status != http.StatusOK {
-			t.Fatalf("flag-on status = %d, want 200; body=%s", status, safeBodySummary(body))
-		}
-		assertUpstreamToolNames(t, "new_search_web")
-	})
-}
-
-// TestToolPrefixExemptsAnthropicTools proves a flagged project can declare a
-// tool Anthropic defines: the stub receives its name exactly as sent, because
-// upstream recognises it under that one name and a prefix would break it,
-// while the project's own tool in the same request is still namespaced.
-func TestToolPrefixExemptsAnthropicTools(t *testing.T) {
-	created := testHarness.createKey(t, "toolprefix-anthropic-tool")
-	testHarness.enableToolPrefix(t, created)
+	created := testHarness.createKey(t, "toolprefix-outbound")
 	testHarness.Upstream.Enqueue(defaultStubResponse())
 
 	status, body := gatewayRequest(t, http.MethodPost, "/v1/messages",
-		bytes.NewBufferString(toolPrefixAnthropicToolBody),
+		bytes.NewBufferString(toolPrefixHistoryBody),
+		requestHeaders{authorization: "Bearer " + created.Plaintext})
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", status, safeBodySummary(body))
+	}
+
+	assertUpstreamToolNames(t, "mcp__llmgw__search_web")
+}
+
+// TestToolPrefixExemptions proves the names the rewrite must leave alone reach
+// the upstream exactly as the client sent them: a tool Anthropic defines,
+// recognised by its "type" and known upstream under one name, and a client's
+// own MCP tool, which the embedded SDK already forwards verbatim. The client's
+// plain tool in the same request is still rewritten.
+func TestToolPrefixExemptions(t *testing.T) {
+	created := testHarness.createKey(t, "toolprefix-exemptions")
+	testHarness.Upstream.Enqueue(defaultStubResponse())
+
+	status, body := gatewayRequest(t, http.MethodPost, "/v1/messages",
+		bytes.NewBufferString(toolPrefixExemptToolsBody),
 		requestHeaders{authorization: "Bearer " + created.Plaintext})
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", status, safeBodySummary(body))
@@ -60,7 +45,8 @@ func TestToolPrefixExemptsAnthropicTools(t *testing.T) {
 
 	assertUpstreamNamesAt(t, map[string]string{
 		"tools.0.function.name": "web_search",
-		"tools.1.function.name": "new_search_web",
+		"tools.1.function.name": "mcp__notion__search",
+		"tools.2.function.name": "mcp__llmgw__search_web",
 	})
 }
 
@@ -72,8 +58,7 @@ func TestToolPrefixExemptsAnthropicTools(t *testing.T) {
 func TestToolPrefixInboundRewrite(t *testing.T) {
 	t.Run("non-streamed prefixed name is stripped", func(t *testing.T) {
 		created := testHarness.createKey(t, "toolprefix-inbound-nonstream")
-		testHarness.enableToolPrefix(t, created)
-		testHarness.Upstream.Enqueue(toolCallResponse("new_search_web"))
+		testHarness.Upstream.Enqueue(toolCallResponse("mcp__llmgw__search_web"))
 		status, body := gatewayRequest(t, http.MethodPost, "/v1/messages",
 			bytes.NewBufferString(toolPrefixDeclarationBody),
 			requestHeaders{authorization: "Bearer " + created.Plaintext})
@@ -87,8 +72,7 @@ func TestToolPrefixInboundRewrite(t *testing.T) {
 
 	t.Run("streamed prefixed name is stripped", func(t *testing.T) {
 		created := testHarness.createKey(t, "toolprefix-inbound-stream")
-		testHarness.enableToolPrefix(t, created)
-		testHarness.Upstream.Enqueue(toolCallStreamResponse("new_search_web"))
+		testHarness.Upstream.Enqueue(toolCallStreamResponse("mcp__llmgw__search_web"))
 		status, body := gatewayRequest(t, http.MethodPost, "/v1/messages",
 			bytes.NewBufferString(toolPrefixStreamingDeclarationBody),
 			requestHeaders{authorization: "Bearer " + created.Plaintext})
@@ -100,8 +84,7 @@ func TestToolPrefixInboundRewrite(t *testing.T) {
 
 	t.Run("split streamed tool call still starts once", func(t *testing.T) {
 		created := testHarness.createKey(t, "toolprefix-inbound-split")
-		testHarness.enableToolPrefix(t, created)
-		testHarness.Upstream.Enqueue(splitToolCallStreamResponse("new_search_web"))
+		testHarness.Upstream.Enqueue(splitToolCallStreamResponse("mcp__llmgw__search_web"))
 		status, body := gatewayRequest(t, http.MethodPost, "/v1/messages",
 			bytes.NewBufferString(toolPrefixStreamingDeclarationBody),
 			requestHeaders{authorization: "Bearer " + created.Plaintext})
@@ -113,7 +96,6 @@ func TestToolPrefixInboundRewrite(t *testing.T) {
 
 	t.Run("name without the prefix is forwarded unchanged", func(t *testing.T) {
 		created := testHarness.createKey(t, "toolprefix-inbound-unprefixed")
-		testHarness.enableToolPrefix(t, created)
 		testHarness.Upstream.Enqueue(toolCallResponse("server_tool"))
 		status, body := gatewayRequest(t, http.MethodPost, "/v1/messages",
 			bytes.NewBufferString(toolPrefixDeclarationBody),
@@ -128,55 +110,45 @@ func TestToolPrefixInboundRewrite(t *testing.T) {
 }
 
 // TestToolPrefixCountTokensReflectsRewrite proves count_tokens counts the
-// rewritten payload: token counting is answered locally and issues no
-// upstream call, so a larger count from the flagged project is the only
-// observable proof the rewrite reached it (spec §11).
+// rewritten payload: token counting is answered locally and issues no upstream
+// call, so the count is the only observable. A plain name and the same name
+// already carrying the prefix must count identically, since the rewrite makes
+// the two payloads the same one — and both must exceed the count of the same
+// request declaring no tool at all, without which that equality would hold
+// whether or not the declarations were counted.
 func TestToolPrefixCountTokensReflectsRewrite(t *testing.T) {
-	unflagged := testHarness.createKey(t, "toolprefix-count-off")
-	flagged := testHarness.createKey(t, "toolprefix-count-on")
-	testHarness.enableToolPrefix(t, flagged)
+	created := testHarness.createKey(t, "toolprefix-count")
 
-	offCount := toolPrefixInputTokens(t, unflagged.Plaintext)
-	onCount := toolPrefixInputTokens(t, flagged.Plaintext)
-	if onCount <= offCount {
-		t.Fatalf("flagged input_tokens = %v, want greater than unflagged %v", onCount, offCount)
+	plain := toolPrefixInputTokens(t, created.Plaintext, toolPrefixCountBody("search_web"))
+	prefixed := toolPrefixInputTokens(t, created.Plaintext, toolPrefixCountBody("mcp__llmgw__search_web"))
+	if plain != prefixed {
+		t.Fatalf("input_tokens = %v for a plain name and %v for an already-prefixed one, want equal",
+			plain, prefixed)
+	}
+
+	withoutTools := toolPrefixInputTokens(t, created.Plaintext, toolPrefixNoToolBody)
+	if plain <= withoutTools {
+		t.Fatalf("input_tokens = %v with a tool and %v without, want the declaration counted",
+			plain, withoutTools)
 	}
 }
 
-// TestToolPrefixNonOKPassesThroughUnchanged proves a non-200 upstream response
-// is unaffected by the flag: the same upstream failure produces an identical
-// client-visible status and body whether or not the project namespaces tool
-// names, because error bodies are never rewritten.
+// TestToolPrefixNonOKPassesThroughUnchanged proves the response wrapper now
+// installed on every generation leaves an upstream failure alone: the client
+// still receives a non-200 carrying the upstream error envelope, not a body
+// the wrapper held, truncated, or rewrote.
 func TestToolPrefixNonOKPassesThroughUnchanged(t *testing.T) {
-	unflagged := testHarness.createKey(t, "toolprefix-nonok-off")
-	flagged := testHarness.createKey(t, "toolprefix-nonok-on")
-	testHarness.enableToolPrefix(t, flagged)
-
+	created := testHarness.createKey(t, "toolprefix-nonok")
 	testHarness.Upstream.Enqueue(invalidRequestUpstreamError())
-	offStatus, offBody := gatewayRequest(t, http.MethodPost, "/v1/messages",
+
+	status, body := gatewayRequest(t, http.MethodPost, "/v1/messages",
 		bytes.NewBufferString(toolPrefixDeclarationBody),
-		requestHeaders{authorization: "Bearer " + unflagged.Plaintext})
-
-	testHarness.Upstream.Enqueue(invalidRequestUpstreamError())
-	onStatus, onBody := gatewayRequest(t, http.MethodPost, "/v1/messages",
-		bytes.NewBufferString(toolPrefixDeclarationBody),
-		requestHeaders{authorization: "Bearer " + flagged.Plaintext})
-
-	if offStatus == http.StatusOK || onStatus != offStatus {
-		t.Fatalf("non-200 status diverged: off=%d on=%d", offStatus, onStatus)
+		requestHeaders{authorization: "Bearer " + created.Plaintext})
+	if status == http.StatusOK {
+		t.Fatalf("status = %d, want an upstream failure", status)
 	}
-	if !bytes.Equal(offBody, onBody) {
-		t.Fatalf("non-200 body diverged with the flag on:\noff=%s\non=%s", offBody, onBody)
-	}
-}
-
-// enableToolPrefix flips one project's tool-name-prefix flag through the real
-// store method, so the suite exercises the operator surface rather than
-// setting up fixtures with raw SQL.
-func (h *Harness) enableToolPrefix(t *testing.T, created governance.CreatedKey) {
-	t.Helper()
-	if err := h.Store.SetProjectToolPrefix(context.Background(), created.Key.ProjectName, true); err != nil {
-		t.Fatal("enable integration tool-name prefix failed")
+	if !gjson.GetBytes(body, "error").Exists() {
+		t.Fatalf("client body = %s, want an error envelope", safeBodySummary(body))
 	}
 }
 
@@ -196,7 +168,7 @@ func assertUpstreamToolNames(t *testing.T, want string) {
 
 // assertUpstreamNamesAt checks the most recently captured upstream request
 // body against the expected name at each given path — the form the assertion
-// takes when one request's tool names are not all namespaced the same way.
+// takes when one request's tool names are not all rewritten the same way.
 func assertUpstreamNamesAt(t *testing.T, want map[string]string) {
 	t.Helper()
 	bodies := testHarness.Upstream.Bodies()
@@ -263,12 +235,12 @@ func assertSingleToolUseStart(t *testing.T, body []byte, want string) {
 	}
 }
 
-// toolPrefixInputTokens issues one count_tokens request declaring a tool and
-// returns the reported input_tokens value.
-func toolPrefixInputTokens(t *testing.T, plaintext string) float64 {
+// toolPrefixInputTokens issues one count_tokens request and returns the
+// reported input_tokens value.
+func toolPrefixInputTokens(t *testing.T, plaintext string, payload string) float64 {
 	t.Helper()
 	status, body := gatewayRequest(t, http.MethodPost, "/v1/messages/count_tokens",
-		bytes.NewBufferString(toolPrefixDeclarationBody),
+		bytes.NewBufferString(payload),
 		requestHeaders{authorization: "Bearer " + plaintext})
 	if status != http.StatusOK {
 		t.Fatalf("count_tokens status = %d, want 200; body=%s", status, safeBodySummary(body))

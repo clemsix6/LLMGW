@@ -49,20 +49,19 @@ func TestDefaultEffortOutboundInjection(t *testing.T) {
 	})
 }
 
-// TestDefaultEffortAndToolPrefixShareOneBodyRead proves a project enabling both
-// settings gets both applied to a single request: the upstream sees the
-// namespaced tool name and the injected level together, which no arrangement
-// of two independent body reads could produce.
+// TestDefaultEffortAndToolPrefixShareOneBodyRead proves a project carrying a
+// default effort gets it applied alongside the tool-name rewrite in a single
+// request: the upstream sees the rewritten tool name and the injected level
+// together, which no arrangement of two independent body reads could produce.
 func TestDefaultEffortAndToolPrefixShareOneBodyRead(t *testing.T) {
 	created := testHarness.createKey(t, "effort-with-tool-prefix")
-	testHarness.enableToolPrefix(t, created)
 	testHarness.setDefaultEffort(t, created, "high")
 
 	effortGeneration(t, created, effortToolBody)
 
 	body := lastUpstreamBody(t)
-	if name := gjson.GetBytes(body, "tools.0.name").String(); name != "new_search_web" {
-		t.Fatalf("upstream tools.0.name = %q, want new_search_web", name)
+	if name := gjson.GetBytes(body, "tools.0.name").String(); name != "mcp__llmgw__search_web" {
+		t.Fatalf("upstream tools.0.name = %q, want mcp__llmgw__search_web", name)
 	}
 	if level := gjson.GetBytes(body, "output_config.effort").String(); level != "high" {
 		t.Fatalf("upstream output_config.effort = %q, want high", level)

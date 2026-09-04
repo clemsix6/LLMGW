@@ -1,3 +1,5 @@
+**Status:** Superseded on 2026-09-04 — the prefix is now unconditional and MCP-shaped (mcp__llmgw__) so the embedded SDK forwards tool names verbatim and the upstream prompt cache stays stable.
+
 # Project Tool-Name Prefix Design
 
 **Date:** 2026-08-04

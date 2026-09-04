@@ -1,10 +1,13 @@
 package integration
 
-import "net/http"
+import (
+	"fmt"
+	"net/http"
+)
 
 // toolPrefixHistoryBody declares one tool, forces its choice, and replays an
 // assistant turn that called it — the three outbound locations the rewrite
-// must namespace together (spec §7).
+// must cover together (spec §7).
 const toolPrefixHistoryBody = `{
 	"model": "test-model",
 	"max_tokens": 16,
@@ -44,20 +47,48 @@ const toolPrefixDeclarationBody = `{
 	"messages": [{"role": "user", "content": "fixture-prompt"}]
 }`
 
-// toolPrefixAnthropicToolBody declares an Anthropic-defined tool — recognised
-// by its "type", not its name — alongside the project's own, so one request
-// carries both sides of the exemption.
-const toolPrefixAnthropicToolBody = `{
+// toolPrefixExemptToolsBody declares both exempt kinds — an Anthropic-defined
+// tool, recognised by its "type" and not its name, and a client MCP tool the
+// embedded SDK already forwards verbatim — alongside a plain client tool, so
+// one request carries every side of the exemption.
+const toolPrefixExemptToolsBody = `{
 	"model": "test-model",
 	"max_tokens": 16,
 	"tools": [
 		{"type": "web_search_20260209", "name": "web_search"},
+		{
+			"name": "mcp__notion__search",
+			"description": "search notion",
+			"input_schema": {"type": "object", "properties": {}}
+		},
 		{
 			"name": "search_web",
 			"description": "search the web",
 			"input_schema": {"type": "object", "properties": {}}
 		}
 	],
+	"messages": [{"role": "user", "content": "fixture-prompt"}]
+}`
+
+// toolPrefixCountBody returns one count_tokens payload declaring a single tool
+// under the given name, so two payloads built from it differ by that name and
+// nothing else.
+func toolPrefixCountBody(name string) string {
+	return fmt.Sprintf(`{
+	"model": "test-model",
+	"max_tokens": 16,
+	"tools": [
+		{"name": %q, "description": "search the web", "input_schema": {"type": "object", "properties": {}}}
+	],
+	"messages": [{"role": "user", "content": "fixture-prompt"}]
+}`, name)
+}
+
+// toolPrefixNoToolBody is toolPrefixCountBody's payload with the declaration
+// removed, the baseline proving tool declarations reach the token count at all.
+const toolPrefixNoToolBody = `{
+	"model": "test-model",
+	"max_tokens": 16,
 	"messages": [{"role": "user", "content": "fixture-prompt"}]
 }`
 

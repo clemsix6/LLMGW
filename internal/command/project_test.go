@@ -28,10 +28,6 @@ func TestProjectUsageAndArguments(t *testing.T) {
 		{"missing command", nil},
 		{"unknown command", []string{"delete"}},
 		{"list with extra argument", []string{"list", "extra"}},
-		{"tool-prefix missing state", []string{"tool-prefix", "demo"}},
-		{"tool-prefix missing name and state", []string{"tool-prefix"}},
-		{"tool-prefix invalid state", []string{"tool-prefix", "demo", "maybe"}},
-		{"tool-prefix extra argument", []string{"tool-prefix", "demo", "on", "extra"}},
 		{"markup-guard missing state", []string{"markup-guard", "demo"}},
 		{"markup-guard missing name and state", []string{"markup-guard"}},
 		{"markup-guard invalid state", []string{"markup-guard", "demo", "maybe"}},
@@ -57,34 +53,32 @@ func TestProjectUsageAndArguments(t *testing.T) {
 			if strings.Contains(err.Error(), "load command configuration") {
 				t.Fatalf("validation reached the store: %v", err)
 			}
-			if !strings.Contains(errOut.String(), "usage: project {list|tool-prefix|markup-guard|effort}") {
+			if !strings.Contains(errOut.String(), "usage: project {list|markup-guard|effort}") {
 				t.Fatalf("usage output = %q, want the shared usage line", errOut.String())
 			}
 		})
 	}
 }
 
-// TestProjectListAndToolPrefix proves list and tool-prefix read and write
-// through the real store: the list shape carries name, creation time, and
-// prefix state; tool-prefix flips the flag both ways; an unknown project is
-// rejected rather than created.
-func TestProjectListAndToolPrefix(t *testing.T) {
+// TestProjectList proves list reads through the real store: a seeded project
+// is printed with its name and a creation time, and an unknown verb is
+// rejected before any store work.
+func TestProjectList(t *testing.T) {
 	factory := newCommandStreamsFactory(t)
-	seedProject(t, factory, "prefix-demo")
+	seedProject(t, factory, "list-demo")
 
-	assertProjectListState(t, factory, "prefix-demo", false)
-
-	runProjectOrFail(t, factory, "tool-prefix", "prefix-demo", "on")
-	assertProjectListState(t, factory, "prefix-demo", true)
-
-	runProjectOrFail(t, factory, "tool-prefix", "prefix-demo", "off")
-	assertProjectListState(t, factory, "prefix-demo", false)
-
-	streams, _, _ := factory.streams()
-	err := runProject(context.Background(), []string{"tool-prefix", "does-not-exist", "on"}, streams)
-	if err == nil || !strings.Contains(err.Error(), `"does-not-exist" does not exist`) {
-		t.Fatalf("unknown project error = %v, want a does-not-exist message", err)
+	output := runProjectOrFail(t, factory, "list")
+	lines := strings.Split(output, "\n")
+	for i, line := range lines {
+		if line != "name\tlist-demo" {
+			continue
+		}
+		if i+1 >= len(lines) || !strings.HasPrefix(lines[i+1], "created_at\t") {
+			t.Fatalf("project %q missing created_at: %q", "list-demo", output)
+		}
+		return
 	}
+	t.Fatalf("project list = %q, missing entry for %q", output, "list-demo")
 }
 
 // TestProjectMarkupGuard proves the markup-guard verb writes and reads back
@@ -162,12 +156,12 @@ func assertProjectListEffort(t *testing.T, factory commandStreamsFactory, name s
 		if line != "name\t"+name {
 			continue
 		}
-		if i+3 >= len(lines) {
+		if i+2 >= len(lines) {
 			t.Fatalf("project %q entry is truncated: %q", name, output)
 		}
 		want := "default_effort\t" + level
-		if lines[i+3] != want {
-			t.Fatalf("project %q default_effort = %q, want %q", name, lines[i+3], want)
+		if lines[i+2] != want {
+			t.Fatalf("project %q default_effort = %q, want %q", name, lines[i+2], want)
 		}
 		return
 	}
@@ -302,31 +296,6 @@ func runProjectOrFail(t *testing.T, factory commandStreamsFactory, args ...strin
 	return out.String()
 }
 
-// assertProjectListState runs project list and checks one project's three
-// printed fields: its name, a created_at value, and the expected prefix state.
-func assertProjectListState(t *testing.T, factory commandStreamsFactory, name string, prefixEnabled bool) {
-	t.Helper()
-	output := runProjectOrFail(t, factory, "list")
-	lines := strings.Split(output, "\n")
-	for i, line := range lines {
-		if line != "name\t"+name {
-			continue
-		}
-		if i+2 >= len(lines) {
-			t.Fatalf("project %q entry is truncated: %q", name, output)
-		}
-		if !strings.HasPrefix(lines[i+1], "created_at\t") {
-			t.Fatalf("project %q missing created_at: %q", name, output)
-		}
-		want := fmt.Sprintf("prefix_tool_names\t%t", prefixEnabled)
-		if lines[i+2] != want {
-			t.Fatalf("project %q prefix state = %q, want %q", name, lines[i+2], want)
-		}
-		return
-	}
-	t.Fatalf("project list = %q, missing entry for %q", output, name)
-}
-
 // assertProjectListMarkupGuard runs project list and checks one project's
 // printed reject_tool_markup field.
 func assertProjectListMarkupGuard(
@@ -342,12 +311,12 @@ func assertProjectListMarkupGuard(
 		if line != "name\t"+name {
 			continue
 		}
-		if i+4 >= len(lines) {
+		if i+3 >= len(lines) {
 			t.Fatalf("project %q entry is truncated: %q", name, output)
 		}
 		want := fmt.Sprintf("reject_tool_markup\t%t", enabled)
-		if lines[i+4] != want {
-			t.Fatalf("project %q markup-guard state = %q, want %q", name, lines[i+4], want)
+		if lines[i+3] != want {
+			t.Fatalf("project %q markup-guard state = %q, want %q", name, lines[i+3], want)
 		}
 		return
 	}

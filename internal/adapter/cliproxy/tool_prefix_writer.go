@@ -38,9 +38,8 @@ const (
 	modeBuffered
 )
 
-// toolPrefixWriter wraps the gin response writer of a flagged project's
-// generation request and removes the outbound tool-name prefix on the way back
-// to the client.
+// toolPrefixWriter wraps the gin response writer of a generation request and
+// removes the outbound tool-name prefix on the way back to the client.
 //
 // Every gin.ResponseWriter method is implemented explicitly rather than
 // promoted from an embedded delegate. WriteString and WriteHeaderNow are the
