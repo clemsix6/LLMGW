@@ -406,7 +406,7 @@ One embed per event, posted as JSON:
   "username": "LLMGW",
   "embeds": [{
     "title": "Credential unauthorized",
-    "description": "claude / clement@example.com stopped authenticating (HTTP 401)",
+    "description": "claude / ops@example.com stopped authenticating (HTTP 401)",
     "color": 14687012,
     "fields": [{"name": "Provider", "value": "claude", "inline": true}],
     "timestamp": "2026-07-30T12:00:00Z"

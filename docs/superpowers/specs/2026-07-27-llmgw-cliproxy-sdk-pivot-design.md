@@ -190,10 +190,11 @@ LLMGW classifies them. This fail-safe default prevents a new route from
 accidentally bypassing budget tracking without copying the SDK's complete route
 table.
 
-Cloudflare is a deployment layer, not a runtime dependency. The recommended
-deployment publishes one hostname through Cloudflare Tunnel to the single LLMGW
-listener. No project-specific hostname or port is required. WARP or additional
-Cloudflare controls can be added without changing LLMGW identity semantics.
+The network edge is a deployment layer, not a runtime dependency. The
+recommended deployment publishes one hostname through a tunnel or reverse proxy
+to the single LLMGW listener. No project-specific hostname or port is required.
+Further network controls can be added without changing LLMGW identity
+semantics.
 
 ## 7. Project Keys
 
@@ -203,13 +204,13 @@ different machines can be revoked independently and rotations can overlap.
 Example:
 
 ```text
-truewallet
+analytics
   key "server-1-claude"
-  key "server-2-hermes"
+  key "server-2"
   key "server-2-opencode"
 ```
 
-All three keys consume the same `truewallet` budget. Reports may group usage by
+All three keys consume the same `analytics` budget. Reports may group usage by
 key name without introducing the old free-form tag model.
 
 ### 7.1 Key format and storage
@@ -279,7 +280,7 @@ LLMGW distinguishes a client request from CLIProxyAPI's upstream attempts.
 
 ```text
 request 019...
-  project=truewallet
+  project=analytics
   key=server-1-claude
   requested_model=claude-opus
 
@@ -666,7 +667,7 @@ directly to PostgreSQL or use the CLIProxyAPI auth SDK locally; they do not call
 remote management API. In Docker, operators use the same image:
 
 ```bash
-docker compose exec llmgw llmgw key create truewallet --name server-1
+docker compose exec llmgw llmgw key create analytics --name server-1
 ```
 
 Rotation creates a replacement key before revoking the old key. With an overlap,
@@ -709,9 +710,9 @@ without an overlap it receives `revoked_at` immediately.
 - Authentication failures use indistinguishable responses.
 - Request body logging stays disabled by default because prompts and tool payloads
   may contain sensitive data.
-- Cloudflare Tunnel is the recommended exposure mechanism so the origin has no
-  public inbound port. LLMGW keys remain required even behind Cloudflare.
-- Deployments without Cloudflare must still terminate TLS before the LLMGW
+- A tunnel or reverse proxy is the recommended exposure so the origin has no
+  public inbound port. LLMGW keys remain required behind it.
+- Deployments without one must still terminate TLS before the LLMGW
   listener; project keys must never cross an unencrypted network.
 - The CLIProxyAPI MIT license and copyright notice ship with LLMGW distributions.
 

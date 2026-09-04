@@ -49,8 +49,8 @@ Redéployer seulement l'ancienne image ne suffit pas.
   conteneur, un seul port.
 - **Le SDK n'est jamais modifié.** Il est consommé tel quel depuis les sources
   officielles. Voir la section suivante.
-- **Les clés restent obligatoires derrière Cloudflare** : le tunnel protège le
-  transport, la clé porte l'identité du projet.
+- **Les clés restent obligatoires derrière un tunnel ou un reverse proxy** : la
+  couche réseau protège le transport, la clé porte l'identité du projet.
 - **Pas de rechargement à chaud** : un changement de configuration exige un
   redémarrage. Une modification hostile du disque ne peut donc pas ouvrir de
   brèche à chaud.
