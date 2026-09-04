@@ -15,7 +15,7 @@ func TestSeededHaikuPriceMatchesListPrice(t *testing.T) {
 SELECT input_per_million, output_per_million,
        cache_read_per_million, cache_creation_per_million
 FROM model_price
-WHERE model_pattern = $1`
+WHERE model_pattern = $1 AND provider = '*'`
 
 	for _, pattern := range []string{"claude-haiku-4-5", "claude-haiku-4-5-*"} {
 		var input, output, cacheRead, cacheCreation float64

@@ -9,11 +9,11 @@ import (
 const haikuPriceFixMigration = "migrations/0019_fix_haiku_4_5_price.sql"
 
 // TestHaikuPriceFixSkipsPricesItDidNotSeed replays the price fix on a database
-// that already carries correct rates, next to a price an operator set
-// themselves. Migrations run at startup and the fix reached running databases
-// by hand before it shipped, so it has to pass over rows that already read
-// right and leave a deliberate rate alone: the guard matches the faulty rates,
-// never the model name. Rewriting either would silently re-price live traffic.
+// whose Haiku rows already read right, next to a price an operator set
+// themselves at the very rates the fix hunts for. Both must cross the
+// migration untouched: it is guarded on the identity of the rows the seed
+// produced, not on the model name, and a gateway that re-prices a rate its
+// operator chose bills real traffic at a number nobody agreed to.
 func TestHaikuPriceFixSkipsPricesItDidNotSeed(t *testing.T) {
 	ctx := context.Background()
 	store := newGovernanceStore(t)
@@ -35,8 +35,9 @@ func TestHaikuPriceFixSkipsPricesItDidNotSeed(t *testing.T) {
 	}
 }
 
-// seedOperatorHaikuPrice prices claude-haiku-4-5 the way an operator who
-// negotiated their own rate would: same pattern, own provider, own numbers.
+// seedOperatorHaikuPrice prices claude-haiku-4-5 the way an operator on an
+// inherited contract would: the same model pattern, their own provider, and
+// the exact rates the fix treats as faulty everywhere else.
 func seedOperatorHaikuPrice(t *testing.T, ctx context.Context, store *Store) {
 	t.Helper()
 
@@ -46,7 +47,7 @@ INSERT INTO model_price (
     input_per_million, output_per_million,
     cache_read_per_million, cache_creation_per_million,
     effective_from
-) VALUES ('operator-negotiated', 'claude-haiku-4-5', '*', 0.5, 2.5, 0.05, 0.625, '1970-01-01')`
+) VALUES ('operator-contract', 'claude-haiku-4-5', '*', 0.80, 4, 0.08, 1, '1970-01-01')`
 	if _, err := store.pool.Exec(ctx, query); err != nil {
 		t.Fatalf("seed operator haiku price: %v", err)
 	}
