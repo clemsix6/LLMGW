@@ -12,11 +12,14 @@ import (
 const (
 	// settledAccountingDelay separates the fixtures these tests settle from the
 	// live traffic every other test in the package leaves behind: reconciliation
-	// is global, so the delay keeps everything younger than it untouched.
-	settledAccountingDelay = 15 * time.Minute
-	// settledFixtureAge dates a fixture past that delay while keeping it inside
-	// the rolling hour a project budget is evaluated over.
-	settledFixtureAge = 20 * time.Minute
+	// is global, so the delay is what keeps everything younger than it
+	// untouched, and it is wide enough that no plausible suite runtime can
+	// reach back into another test's requests.
+	settledAccountingDelay = 3 * time.Hour
+	// settledFixtureAge dates a fixture past that delay. It is why the budget
+	// these tests install is evaluated over a day: the fixture has to weigh on
+	// admission, and the rolling hour would no longer see it.
+	settledFixtureAge = 6 * time.Hour
 )
 
 // probeRequests are the discovery probes model-listing clients send at a
@@ -63,7 +66,9 @@ func TestRejectedProbeIsNotUnresolvedAccounting(t *testing.T) {
 		t.Fatalf("probe unresolved accounting = %d, want none", got)
 	}
 
-	testHarness.setBudget(t, created, governance.DimensionTokens, 1000, governance.ActionBlock)
+	testHarness.setWindowBudget(
+		t, created, governance.DimensionTokens, governance.WindowDay, 1000, governance.ActionBlock,
+	)
 	testHarness.Upstream.Enqueue(jsonUsageResponse(4, 2))
 	status, _ := authenticatedGeneration(t, created.Plaintext, "test-model")
 	if status != http.StatusOK {
@@ -86,7 +91,9 @@ func TestRecordlessGenerationStaysUnresolvedAccounting(t *testing.T) {
 		t.Fatalf("recordless unresolved accounting = %d, want 1", got)
 	}
 
-	testHarness.setBudget(t, created, governance.DimensionTokens, 1000, governance.ActionBlock)
+	testHarness.setWindowBudget(
+		t, created, governance.DimensionTokens, governance.WindowDay, 1000, governance.ActionBlock,
+	)
 	status, _ := authenticatedGeneration(t, created.Plaintext, "test-model")
 	if status != http.StatusPaymentRequired {
 		t.Fatalf("generation after recordless usage status = %d, want 402", status)

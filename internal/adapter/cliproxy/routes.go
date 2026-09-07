@@ -40,9 +40,17 @@ func Classify(method string, path string) RouteClass {
 // Classify has no route table, so it answers for a path that exists and for a
 // path that does not with the same RouteGeneration default. The router does
 // know: it leaves the matched route empty for a request it will answer from
-// NoRoute. An empty value therefore proves the request reaches no handler, so
-// it reaches no provider and can consume nothing — while a route the SDK adds
-// in a later version still matches, and still falls to the metered default.
+// NoRoute. An empty value therefore proves the request reaches no registered
+// handler, so it reaches no provider and can consume nothing, while a route
+// registered by a later SDK version still matches and still falls to the
+// metered default.
+//
+// The SDK also answers a few paths from NoRoute itself rather than from the
+// route table, and those read here as unrouted. That is only correct while
+// every one of them is a surface LLMGW denies outright — today the management
+// and plugin-resource paths, which deniedPath refuses before this runs. An SDK
+// that ever served a provider protocol that way would need classifying there
+// first, not here.
 func routed(c *gin.Context) bool {
 	return c.FullPath() != ""
 }

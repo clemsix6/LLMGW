@@ -11,6 +11,21 @@
 -- router exposed when this statement was written, and the list is frozen on
 -- purpose: the statement runs once over rows already in the table, so it
 -- cannot fall behind a router it never reads again.
+--
+-- Two deliberate ways this resolves less than the gateway now refuses, both
+-- chosen because the two directions of error are not symmetric. Over-excluding
+-- leaves a certain zero unresolved, and a rolling budget window is at most a
+-- day wide, so such a row stops weighing on admission within a day and no new
+-- one can be written once the router decides admission. Under-excluding clears
+-- a request that did reach a handler, and that silently unblocks a budget on a
+-- charge nobody can account for.
+--
+-- So the excluded surfaces are matched on path alone, ignoring method, even
+-- though only some methods are registered on them: a method stated wrong here
+-- would resolve a row that was served. And a recorded 404 is required as the
+-- evidence that the gateway answered the request itself, which is why rows
+-- recovered without any downstream status are left alone even when their path
+-- was never routable.
 UPDATE request_event r
 SET accounting_state = 'resolved_zero',
     accounting_resolved_at = now()

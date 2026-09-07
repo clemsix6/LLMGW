@@ -215,11 +215,24 @@ func (h *Harness) setBudget(
 	action governance.Action,
 ) {
 	t.Helper()
+	h.setWindowBudget(t, created, dimension, governance.WindowHour, maximum, action)
+}
+
+// setWindowBudget installs one project limit over a chosen rolling window.
+func (h *Harness) setWindowBudget(
+	t *testing.T,
+	created governance.CreatedKey,
+	dimension governance.Dimension,
+	window governance.Window,
+	maximum float64,
+	action governance.Action,
+) {
+	t.Helper()
 	if _, err := h.Store.SetBudget(
 		context.Background(),
 		created.Key.ProjectName,
 		dimension,
-		governance.WindowHour,
+		window,
 		maximum,
 		action,
 	); err != nil {
