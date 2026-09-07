@@ -3,6 +3,8 @@ package cliproxy
 import (
 	"net/http"
 	"strings"
+
+	"github.com/gin-gonic/gin"
 )
 
 // RouteClass identifies the governance policy applied to one proxy route.
@@ -31,6 +33,18 @@ func Classify(method string, path string) RouteClass {
 		return RouteMetadata
 	}
 	return RouteGeneration
+}
+
+// routed reports whether the router matched a registered route for one request.
+//
+// Classify has no route table, so it answers for a path that exists and for a
+// path that does not with the same RouteGeneration default. The router does
+// know: it leaves the matched route empty for a request it will answer from
+// NoRoute. An empty value therefore proves the request reaches no handler, so
+// it reaches no provider and can consume nothing — while a route the SDK adds
+// in a later version still matches, and still falls to the metered default.
+func routed(c *gin.Context) bool {
+	return c.FullPath() != ""
 }
 
 // deniedPath reports whether a path belongs to an SDK surface LLMGW never exposes.

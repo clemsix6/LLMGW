@@ -25,16 +25,17 @@ var fixedTime = time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 // It exists beside runMiddleware because the alert cases need a tracker and a
 // caller-owned request context, which would otherwise widen every call site.
 type middlewareRequest struct {
-	method   string          // method is the HTTP method to drive.
-	path     string          // path is the requested path.
-	headers  http.Header     // headers carry the project credential.
-	keys     *fakeKeys       // keys stands in for the project-key authenticator.
-	requests *fakeRequests   // requests stands in for the governance repository.
-	next     gin.HandlerFunc // next is the downstream handler, nil for a plain 200.
-	tracker  *alert.Tracker  // tracker observes admissions, generations and database health.
-	ctx      context.Context // ctx is the inbound request context, nil for the default.
-	body     io.Reader       // body is the request body, nil for none.
-	bridge   *UsageBridge    // bridge replaces the default one, to observe its capacity.
+	method   string            // method is the HTTP method to drive.
+	path     string            // path is the requested path.
+	headers  http.Header       // headers carry the project credential.
+	keys     *fakeKeys         // keys stands in for the project-key authenticator.
+	requests *fakeRequests     // requests stands in for the governance repository.
+	next     gin.HandlerFunc   // next is the downstream handler, nil for a plain 200.
+	tracker  *alert.Tracker    // tracker observes admissions, generations and database health.
+	ctx      context.Context   // ctx is the inbound request context, nil for the default.
+	body     io.Reader         // body is the request body, nil for none.
+	bridge   *UsageBridge      // bridge replaces the default one, to observe its capacity.
+	register func(*gin.Engine) // register installs the routes, defaulting to a catch-all.
 }
 
 // runMiddlewareRequest drives one configured request through the middleware.
@@ -61,7 +62,11 @@ func runMiddlewareRequest(t *testing.T, spec middlewareRequest) *httptest.Respon
 	)
 	engine := gin.New()
 	engine.Use(middleware.Handler())
-	engine.Any("/*path", orStatusOK(spec.next))
+	if spec.register != nil {
+		spec.register(engine)
+	} else {
+		engine.Any("/*path", orStatusOK(spec.next))
+	}
 	engine.ServeHTTP(recorder, request)
 	return recorder
 }

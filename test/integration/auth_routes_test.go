@@ -97,7 +97,12 @@ func assertDeniedRoutes(t *testing.T, created governance.CreatedKey) {
 	}
 }
 
-// assertUnknownRoute verifies fail-closed authentication and generation accounting.
+// assertUnknownRoute verifies fail-closed authentication and unrecorded refusal.
+//
+// A path the router matches nowhere is refused without accounting: it reaches
+// no handler, so no provider can be reached and nothing can be owed. The
+// fail-closed default that meters a path LLMGW never classified still applies
+// to every route the SDK actually serves.
 func assertUnknownRoute(t *testing.T, created governance.CreatedKey) {
 	t.Helper()
 	status, _ := gatewayRequest(t, http.MethodGet, "/new-sdk-route", nil, requestHeaders{})
@@ -110,8 +115,8 @@ func assertUnknownRoute(t *testing.T, created governance.CreatedKey) {
 	if status != http.StatusNotFound {
 		t.Fatalf("authenticated new route status = %d, want 404", status)
 	}
-	if got := requestCount(t, created, governance.OperationGeneration, "/new-sdk-route"); got != 1 {
-		t.Fatalf("new route generation count = %d, want 1", got)
+	if got := requestCount(t, created, governance.OperationGeneration, "/new-sdk-route"); got != 0 {
+		t.Fatalf("new route generation count = %d, want 0", got)
 	}
 }
 

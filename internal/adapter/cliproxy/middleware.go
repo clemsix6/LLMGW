@@ -135,6 +135,15 @@ func (m *Middleware) handle(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// Answered like a denied surface, and after authentication so an unknown
+	// path stays as unreadable to an anonymous caller as every other one. A
+	// request no route matched contacts no provider, so admitting it would
+	// record a generation whose absent usage record later reads as unresolved
+	// accounting and blocks the project's token and cost budgets over nothing.
+	if !routed(c) {
+		c.AbortWithStatus(http.StatusNotFound)
+		return
+	}
 	m.admit(c, class, keyIdentity)
 }
 
