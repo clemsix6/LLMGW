@@ -13,9 +13,12 @@ import (
 // alertWaitTimeout bounds every wait on an event the request path already produced.
 const alertWaitTimeout = 5 * time.Second
 
-// The two aliases these tests drive. Each resolves to an upstream model no other
-// file requests, so no other test can move the same credential entity in this
-// process and make a per-credential count depend on file order.
+// The two aliases these tests drive. Cooldown is credential-wide (a 429 on one
+// model cools down every model the credential serves), so each alias is also
+// backed by its own dedicated pair of harness credentials (see configYAML):
+// nothing else in the package requests either model or shares either
+// credential, so the cooldown one test leaves behind cannot bleed into the
+// other or make a per-credential count depend on file order.
 const (
 	rateLimitAlias  = "cooldown-other-model"
 	rateLimitModel  = "codex-other-model"
@@ -58,8 +61,8 @@ func TestUpstreamRateLimitAlertsTheCredential(t *testing.T) {
 // A repeated 5xx is the case the harness config permits to recur:
 // transient-error-cooldown-seconds is -1, so a failing credential stays
 // immediately eligible and every request really does reach the same two
-// (credential, model) pairs again. A repeated 429 would instead be answered from
-// the SDK's model cooldown without contacting upstream, which proves nothing
+// credentials again. A repeated 429 would instead be answered from the SDK's
+// credential-wide cooldown without contacting upstream, which proves nothing
 // about deduplication.
 func TestRepeatedUpstreamFailureAlertsOncePerCredential(t *testing.T) {
 	created := testHarness.createKey(t, "alert-failing")

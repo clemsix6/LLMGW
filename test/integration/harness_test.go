@@ -122,6 +122,7 @@ func (h *Harness) startUpstreamAndFiles() error {
 	h.registerSecrets(
 		"upstream-account-a", "upstream-account-b",
 		"upstream-codex-account-a", "upstream-codex-account-b",
+		"upstream-codex-account-c", "upstream-codex-account-d",
 		"upstream-claude-account-a",
 		"fixture-prompt", fixtureToolSecret, h.Upstream.URL(),
 		upstreamFailureSecret, upstreamHeaderSecret, "transient-failover-fixture",
@@ -316,9 +317,6 @@ codex-api-key:
       - name: codex-other-model
         alias: cooldown-other-model
         force-mapping: true
-      - name: codex-no-reset-model
-        alias: cooldown-no-reset-model
-        force-mapping: true
   - api-key: upstream-codex-account-b
     base-url: %q
     models:
@@ -331,6 +329,15 @@ codex-api-key:
       - name: codex-other-model
         alias: cooldown-other-model
         force-mapping: true
+  - api-key: upstream-codex-account-c
+    base-url: %q
+    models:
+      - name: codex-no-reset-model
+        alias: cooldown-no-reset-model
+        force-mapping: true
+  - api-key: upstream-codex-account-d
+    base-url: %q
+    models:
       - name: codex-no-reset-model
         alias: cooldown-no-reset-model
         force-mapping: true
@@ -346,7 +353,8 @@ llmgw:
   key-pepper-env: TEST_KEY_PEPPER
   usage-retention-days: 35
   usage-outstanding-capacity: 2
-`, port, h.AuthDir, h.Upstream.URL()+"/v1", h.Upstream.URL(), h.Upstream.URL(), h.Upstream.URL()))
+`, port, h.AuthDir, h.Upstream.URL()+"/v1",
+		h.Upstream.URL(), h.Upstream.URL(), h.Upstream.URL(), h.Upstream.URL(), h.Upstream.URL()))
 }
 
 // waitReady polls the public health endpoint without credentials.
