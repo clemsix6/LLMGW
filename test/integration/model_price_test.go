@@ -17,7 +17,7 @@ type seededListPrice struct {
 }
 
 // TestSeededPricesMatchListPrice proves a database created from scratch prices
-// the corrected models at Anthropic's published rates. A wrong rate here never
+// the seeded models at Anthropic's published rates. A wrong rate here never
 // fails anything: attempts are costed, recorded and charged to a project at a
 // price nobody publishes, and cost budgets act on the difference.
 func TestSeededPricesMatchListPrice(t *testing.T) {
@@ -32,6 +32,8 @@ WHERE model_pattern = $1 AND provider = '*'`
 		{pattern: "claude-haiku-4-5-*", input: 1, output: 5, cacheRead: 0.1, cacheCreation: 1.25},
 		{pattern: "claude-opus-4-8", input: 5, output: 25, cacheRead: 0.5, cacheCreation: 6.25},
 		{pattern: "claude-opus-4-8-*", input: 5, output: 25, cacheRead: 0.5, cacheCreation: 6.25},
+		{pattern: "claude-opus-5-5", input: 4, output: 20, cacheRead: 0.20, cacheCreation: 5.00},
+		{pattern: "claude-opus-5-5-*", input: 4, output: 20, cacheRead: 0.20, cacheCreation: 5.00},
 	}
 
 	for _, want := range expected {
