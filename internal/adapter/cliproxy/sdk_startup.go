@@ -7,7 +7,7 @@ import (
 )
 
 const (
-	sdkRuntimeReadyMessage = "core auth auto-refresh started (interval=15m0s)"
+	sdkRuntimeReadyMessage = "file watcher started for config and auth directory changes"
 	sdkRuntimeReadyCaller  = "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy.(*Service).Run"
 )
 
@@ -19,9 +19,13 @@ var (
 // sdkStartupBarrier observes the pinned SDK's final synchronous initialization event.
 //
 // The pinned CLIProxyAPI invokes OnAfterStart before assigning fields consumed by
-// Shutdown. Its final initialization log occurs after those assignments and
-// the core auto-refresh state, so this hook supplies the missing happens-before
-// edge for concurrent Run and Shutdown.
+// Shutdown. Its final initialization log occurs after those assignments, so this
+// hook supplies the missing happens-before edge for concurrent Run and Shutdown.
+// The chosen message is the last one the SDK logs before it blocks serving, and
+// it fires only once every field Shutdown reads back has been assigned; an
+// upstream reorder that moves it earlier, later, or drops it is exactly what the
+// exact-match Fire check below is built to catch as a startup failure rather
+// than let the barrier close on a false signal.
 type sdkStartupBarrier struct {
 	mu    sync.Mutex    // mu protects the sole process-wide startup waiter.
 	owner *Service      // owner identifies the reserved wrapper lifecycle.
