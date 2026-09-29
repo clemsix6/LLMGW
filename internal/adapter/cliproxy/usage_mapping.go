@@ -34,6 +34,7 @@ func mapUsageRecord(
 		ResponseServiceTier: record.ResponseServiceTier,
 		Failed:              record.Failed,
 		UpstreamStatus:      positiveStatus(record.Fail.StatusCode),
+		UpstreamError:       upstreamError(record),
 		Latency:             nonNegativeDuration(record.Latency),
 		TTFT:                nonNegativeDuration(record.TTFT),
 		CreatedAt:           record.RequestedAt.UTC(),
@@ -79,4 +80,13 @@ func nonNegativeDuration(value time.Duration) time.Duration {
 		return 0
 	}
 	return value
+}
+
+// upstreamError keeps the error type and message of a failed 4xx attempt when
+// the SDK handed over the standard error JSON body, and nothing otherwise.
+func upstreamError(record sdkusage.Record) *governance.ErrorDetail {
+	if !record.Failed || !governance.IsClientErrorStatus(record.Fail.StatusCode) {
+		return nil
+	}
+	return governance.ParseErrorDetail([]byte(record.Fail.Body))
 }

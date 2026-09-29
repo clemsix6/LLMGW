@@ -49,10 +49,11 @@ INSERT INTO usage_attempt (
     upstream_auth_id, upstream_auth_type, input_tokens, output_tokens,
     reasoning_tokens, cache_read_tokens, cache_creation_tokens, total_tokens,
     unclassified_tokens, service_tier, response_service_tier, failed,
-    upstream_status, latency_ms, ttft_ms, cost_usd, pricing_state, created_at
+    upstream_status, latency_ms, ttft_ms, cost_usd, pricing_state, created_at,
+    upstream_error_type, upstream_error_message
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24
+    $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26
 )
 ON CONFLICT (id) DO NOTHING`
 	tag, err := tx.Exec(
@@ -82,6 +83,8 @@ ON CONFLICT (id) DO NOTHING`
 		attempt.CostUSD,
 		attempt.PricingState,
 		attempt.CreatedAt,
+		errorType(attempt.UpstreamError),
+		errorMessage(attempt.UpstreamError),
 	)
 	if err != nil {
 		return false, fmt.Errorf("insert usage attempt %q:\n%w", attempt.ID, err)
@@ -105,4 +108,20 @@ WHERE id = $1 AND operation = 'generation'`
 		return fmt.Errorf("observe usage parent %q:\n%w", attempt.RequestID, err)
 	}
 	return nil
+}
+
+// errorType returns the nullable error type column value.
+func errorType(detail *governance.ErrorDetail) *string {
+	if detail == nil || detail.Type == "" {
+		return nil
+	}
+	return &detail.Type
+}
+
+// errorMessage returns the nullable error message column value.
+func errorMessage(detail *governance.ErrorDetail) *string {
+	if detail == nil || detail.Message == "" {
+		return nil
+	}
+	return &detail.Message
 }
