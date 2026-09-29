@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/clemsix6/LLMGW/internal/domain/governance"
-	sdkusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	sdkusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 )
 
 // mapUsageRecord copies only approved normalized SDK fields.

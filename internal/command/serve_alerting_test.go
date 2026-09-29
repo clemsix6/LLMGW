@@ -14,7 +14,7 @@ import (
 
 	"github.com/clemsix6/LLMGW/internal/config"
 	"github.com/clemsix6/LLMGW/internal/domain/governance/alert"
-	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 )
 
 // The serve fixture's DSN carries a recognisable user and host. The returned

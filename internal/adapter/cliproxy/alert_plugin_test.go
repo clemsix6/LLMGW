@@ -10,7 +10,7 @@ import (
 	"github.com/clemsix6/LLMGW/internal/config"
 	"github.com/clemsix6/LLMGW/internal/domain/governance/alert"
 	"github.com/google/uuid"
-	sdkusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	sdkusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 )
 
 // recordingNotifier collects every event a tracker delivers.

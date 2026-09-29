@@ -3,7 +3,7 @@
 ## CLIProxyAPI
 
 - Repository: https://github.com/router-for-me/CLIProxyAPI
-- Version: v7.2.155
+- Version: v8.0.4
 - License: MIT
 
 LLMGW embeds CLIProxyAPI as a Go library at the exact version pinned in

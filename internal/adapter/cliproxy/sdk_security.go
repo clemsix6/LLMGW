@@ -5,11 +5,11 @@ import (
 	"fmt"
 
 	"github.com/gin-gonic/gin"
-	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
-	sdkapi "github.com/router-for-me/CLIProxyAPI/v7/sdk/api"
-	sdkproxy "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
-	sdkauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
+	sdkapi "github.com/router-for-me/CLIProxyAPI/v8/sdk/api"
+	sdkproxy "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy"
+	sdkauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 )
 
 // buildSecureSDKWithAfterStart builds the secure SDK and exposes established startup internally.

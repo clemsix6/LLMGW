@@ -8,7 +8,7 @@ import (
 
 	"github.com/clemsix6/LLMGW/internal/domain/governance"
 	"github.com/google/uuid"
-	sdkusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	sdkusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 )
 
 // TestUsageRecordMapping verifies only canonical and approved SDK fields persist.

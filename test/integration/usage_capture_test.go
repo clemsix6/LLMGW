@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	sdkusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	sdkusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 )
 
 // usageObservation contains only the safe SDK principal.
