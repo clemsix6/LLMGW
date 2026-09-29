@@ -13,7 +13,10 @@ cooldown, and retry behaviour.
 ## Deploy
 
 LLMGW uses one shared YAML file. Native CLIProxyAPI fields are at the YAML
-root; LLMGW-owned settings are under `llmgw`. Keep provider credentials in the
+root, in CLIProxyAPI's flat layout; LLMGW-owned settings are under `llmgw`.
+The grouped v8 layout (`server`, `management`, `observability`, …) is refused
+at startup, because LLMGW validates the security-sensitive settings by their
+flat spelling. Keep provider credentials in the
 YAML only when the native SDK requires them, otherwise use your secret manager
 to render the file. PostgreSQL credentials and the project-key pepper remain
 environment/secret-manager values.

@@ -189,5 +189,7 @@ var deniedRoutes = []string{
 	"/antigravity/callback",
 	"/management.html",
 	"/v0/management/config",
+	"/v8/management/config",
+	"/v8/management/oauth/callback",
 	"/v0/resource/plugins/x",
 }
