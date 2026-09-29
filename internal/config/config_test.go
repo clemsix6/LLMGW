@@ -125,6 +125,22 @@ func TestSecurityRejectsUnsafeConfiguration(t *testing.T) {
 			yaml: strings.Replace(secureConfig, "  session-affinity: false\n", "  session-affinity: false\n  retry:\n    request-retry: 50\n", 1),
 		},
 		{
+			name: "v8 layout retry behind an alias",
+			yaml: routingAliasConfig("x: &r {retry: {request-retry: 50}}\nrouting: *r\n"),
+		},
+		{
+			name: "v8 layout retry behind a nested alias",
+			yaml: routingAliasConfig("a: &a {request-retry: 50}\nb: &b {retry: *a}\nrouting: *b\n"),
+		},
+		{
+			name: "v8 layout retry behind an alias of an alias",
+			yaml: routingAliasConfig("a: &a {cooldown: {seconds: 1}}\nb: &b *a\nrouting: *b\n"),
+		},
+		{
+			name: "v8 layout upstream key groups behind an alias",
+			yaml: secureConfig + "x: &k {claude: []}\napi-keys: *k\n",
+		},
+		{
 			name: "v8 layout version marker",
 			yaml: secureConfig + "config-version: 8\n",
 		},
@@ -170,6 +186,14 @@ remote-management:
   secret-key: ""
   disable-control-panel: true
 `
+
+// routingAliasConfig replaces the routing section of secureConfig with the
+// given YAML, which declares its own routing through anchors and aliases.
+func routingAliasConfig(routing string) string {
+	start := strings.Index(secureConfig, "routing:")
+	end := strings.Index(secureConfig, "remote-management:")
+	return secureConfig[:start] + routing + secureConfig[end:]
+}
 
 // writeConfig writes a configuration fixture and returns its path.
 func writeConfig(t *testing.T, contents string) string {

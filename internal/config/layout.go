@@ -39,7 +39,7 @@ func rejectV8Layout(data []byte) error {
 			return v8LayoutError(key)
 		}
 	}
-	if keys, found := root["api-keys"]; found && keys.Kind == yaml.MappingNode {
+	if keys, found := root["api-keys"]; found && resolveAlias(keys).Kind == yaml.MappingNode {
 		return v8LayoutError("api-keys (as a mapping)")
 	}
 	return rejectV8RoutingKeys(root["routing"])
@@ -47,6 +47,7 @@ func rejectV8Layout(data []byte) error {
 
 // rejectV8RoutingKeys refuses the v8-only keys of the shared routing section.
 func rejectV8RoutingKeys(routing yaml.Node) error {
+	routing = resolveAlias(routing)
 	if routing.Kind != yaml.MappingNode {
 		return nil
 	}
@@ -60,6 +61,17 @@ func rejectV8RoutingKeys(routing yaml.Node) error {
 		}
 	}
 	return nil
+}
+
+// resolveAlias follows YAML aliases, through any chain of them, to the node
+// they stand for. yaml.v3 keeps an alias as an unresolved node whose kind is
+// not that of its target, so a kind check on the raw node would let a section
+// hidden behind an anchor reference through.
+func resolveAlias(node yaml.Node) yaml.Node {
+	for node.Kind == yaml.AliasNode && node.Alias != nil {
+		node = *node.Alias
+	}
+	return node
 }
 
 // v8LayoutError names the offending setting and the layout LLMGW accepts.
