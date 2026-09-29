@@ -110,3 +110,56 @@ func (s *usageRepositoryStub) RecordAttempt(
 	}
 	return s.recordAttempt(ctx, attempt)
 }
+
+// TestResolvedModelFollowsTheAnsweringModel proves a fallback turn is visible:
+// the recorded model is the one that answered when the SDK reports it, and the
+// routed model otherwise.
+func TestResolvedModelFollowsTheAnsweringModel(t *testing.T) {
+	tests := []struct {
+		name          string
+		responseModel string
+		want          string
+	}{
+		{name: "empty", responseModel: "", want: "routed-model"},
+		{name: "equal", responseModel: "routed-model", want: "routed-model"},
+		{name: "different", responseModel: "fallback-model", want: "fallback-model"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			record := sdkusage.Record{Model: "routed-model", ResponseModel: test.responseModel}
+			got := mapUsageRecord(record, usageCorrelation{}, uuid.NewString())
+			if got.ResolvedModel != test.want {
+				t.Fatalf("ResolvedModel = %q, want %q", got.ResolvedModel, test.want)
+			}
+		})
+	}
+}
+
+// TestPricingIgnoresTheAnsweringModel proves recording a different answering
+// model leaves pricing alone: the price rule is still looked up by the model
+// the request was routed to.
+func TestPricingIgnoresTheAnsweringModel(t *testing.T) {
+	var pricedModel string
+	repo := &usageRepositoryStub{
+		priceRuleFor: func(_ context.Context, _, model, _ string, _ time.Time) (governance.PriceRule, bool, error) {
+			pricedModel = model
+			return governance.PriceRule{}, false, nil
+		},
+	}
+	record := sdkusage.Record{
+		Provider:      "claude",
+		Model:         "routed-model",
+		ResponseModel: "fallback-model",
+	}
+	attempt := mapUsageRecord(record, usageCorrelation{}, uuid.NewString())
+
+	priced, err := NewUsagePlugin(repo, nil, nil).price(context.Background(), record, attempt)
+	if err != nil {
+		t.Fatalf("price failed: %v", err)
+	}
+	if pricedModel != "routed-model" || priced.ResolvedModel != "fallback-model" {
+		t.Fatalf("priced by %q, recorded %q; want priced by routed-model, recorded fallback-model",
+			pricedModel, priced.ResolvedModel)
+	}
+}

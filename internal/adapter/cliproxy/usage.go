@@ -124,6 +124,9 @@ func (p *UsagePlugin) persist(
 }
 
 // price resolves effective notional pricing without rejecting unknown prices.
+// It prices by the model the request was routed to, not by the model the
+// response reports, so recording a different answering model never changes how
+// an attempt is priced.
 func (p *UsagePlugin) price(
 	ctx context.Context,
 	record sdkusage.Record,
@@ -132,7 +135,7 @@ func (p *UsagePlugin) price(
 	rule, found, err := p.repo.PriceRuleFor(
 		ctx,
 		attempt.Provider,
-		attempt.ResolvedModel,
+		record.Model,
 		pricingTier(attempt),
 		attempt.CreatedAt,
 	)

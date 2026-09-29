@@ -25,7 +25,7 @@ func mapUsageRecord(
 		ClientKeyPublicID:   correlation.keyPublicID,
 		Provider:            record.Provider,
 		ExecutorType:        record.ExecutorType,
-		ResolvedModel:       record.Model,
+		ResolvedModel:       resolvedModel(record),
 		RequestedAlias:      record.Alias,
 		UpstreamAuthID:      record.AuthID,
 		UpstreamAuthType:    record.AuthType,
@@ -38,6 +38,17 @@ func mapUsageRecord(
 		TTFT:                nonNegativeDuration(record.TTFT),
 		CreatedAt:           record.RequestedAt.UTC(),
 	}
+}
+
+// resolvedModel names the model that served the answer. The SDK reports it as
+// the response model; when the upstream did not say, the model the request was
+// routed to stands in. A fallback the upstream applied on its own, such as a
+// refusal fallback, is therefore visible in the record.
+func resolvedModel(record sdkusage.Record) string {
+	if record.ResponseModel != "" {
+		return record.ResponseModel
+	}
+	return record.Model
 }
 
 // mapTokenBreakdown converts the SDK's v2 canonical buckets without overlap.
