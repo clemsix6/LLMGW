@@ -66,7 +66,8 @@ func TestRequestRewriteRouteEligibility(t *testing.T) {
 			got := resolveRequestRewrite(identity, request)
 			if got.prefixToolNames != test.wantPrefix ||
 				got.effortLevel != test.wantEffort ||
-				got.claimContextEdits != test.wantClaim {
+				got.claimContextEdits != test.wantClaim ||
+				got.claimThinking != test.wantClaim {
 				t.Fatalf("resolveRequestRewrite = %+v, want prefix %v effort %q claim %v",
 					got, test.wantPrefix, test.wantEffort, test.wantClaim)
 			}
