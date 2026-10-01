@@ -12,7 +12,7 @@ import (
 	"github.com/clemsix6/LLMGW/internal/adapter/postgres"
 	"github.com/clemsix6/LLMGW/internal/config"
 	"github.com/clemsix6/LLMGW/internal/domain/governance/alert"
-	sdkauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
+	sdkauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
 )
 
 var authLogin = cliproxy.Login

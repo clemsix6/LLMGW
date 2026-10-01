@@ -4,7 +4,7 @@ import (
 	"time"
 
 	"github.com/clemsix6/LLMGW/internal/domain/governance"
-	sdkusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	sdkusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 )
 
 // mapUsageRecord copies only approved normalized SDK fields.
@@ -25,7 +25,7 @@ func mapUsageRecord(
 		ClientKeyPublicID:   correlation.keyPublicID,
 		Provider:            record.Provider,
 		ExecutorType:        record.ExecutorType,
-		ResolvedModel:       record.Model,
+		ResolvedModel:       resolvedModel(record),
 		RequestedAlias:      record.Alias,
 		UpstreamAuthID:      record.AuthID,
 		UpstreamAuthType:    record.AuthType,
@@ -34,10 +34,22 @@ func mapUsageRecord(
 		ResponseServiceTier: record.ResponseServiceTier,
 		Failed:              record.Failed,
 		UpstreamStatus:      positiveStatus(record.Fail.StatusCode),
+		UpstreamError:       upstreamError(record),
 		Latency:             nonNegativeDuration(record.Latency),
 		TTFT:                nonNegativeDuration(record.TTFT),
 		CreatedAt:           record.RequestedAt.UTC(),
 	}
+}
+
+// resolvedModel names the model that served the answer. The SDK reports it as
+// the response model; when the upstream did not say, the model the request was
+// routed to stands in. A fallback the upstream applied on its own, such as a
+// refusal fallback, is therefore visible in the record.
+func resolvedModel(record sdkusage.Record) string {
+	if record.ResponseModel != "" {
+		return record.ResponseModel
+	}
+	return record.Model
 }
 
 // mapTokenBreakdown converts the SDK's v2 canonical buckets without overlap.
@@ -68,4 +80,13 @@ func nonNegativeDuration(value time.Duration) time.Duration {
 		return 0
 	}
 	return value
+}
+
+// upstreamError keeps the error type and message of a failed 4xx attempt when
+// the SDK handed over the standard error JSON body, and nothing otherwise.
+func upstreamError(record sdkusage.Record) *governance.ErrorDetail {
+	if !record.Failed || !governance.IsClientErrorStatus(record.Fail.StatusCode) {
+		return nil
+	}
+	return governance.ParseErrorDetail([]byte(record.Fail.Body))
 }

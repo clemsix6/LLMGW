@@ -8,7 +8,7 @@ import (
 
 const (
 	sdkRuntimeReadyMessage = "file watcher started for config and auth directory changes"
-	sdkRuntimeReadyCaller  = "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy.(*Service).Run"
+	sdkRuntimeReadyCaller  = "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy.(*Service).Run"
 )
 
 var (

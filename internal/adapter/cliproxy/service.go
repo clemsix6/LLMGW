@@ -5,12 +5,12 @@ import (
 	"fmt"
 
 	"github.com/clemsix6/LLMGW/internal/config"
-	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
-	sdkapi "github.com/router-for-me/CLIProxyAPI/v7/sdk/api"
-	sdkproxy "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
-	sdkusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
-	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
-	sdklogging "github.com/router-for-me/CLIProxyAPI/v7/sdk/logging"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
+	sdkapi "github.com/router-for-me/CLIProxyAPI/v8/sdk/api"
+	sdkproxy "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy"
+	sdkusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
+	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
+	sdklogging "github.com/router-for-me/CLIProxyAPI/v8/sdk/logging"
 )
 
 // NewService builds one secured, one-shot embedded CLIProxyAPI service.

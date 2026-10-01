@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -110,6 +110,9 @@ func Load(path string, getenv func(string) string) (Config, error) {
 		return Config{}, fmt.Errorf("read configuration file:\n%w", err)
 	}
 
+	if err := rejectV8Layout(data); err != nil {
+		return Config{}, err
+	}
 	projection, err := decodeSecurityProjection(data)
 	if err != nil {
 		return Config{}, err

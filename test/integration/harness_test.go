@@ -348,6 +348,11 @@ claude-api-key:
       - name: claude-upstream-model
         alias: anthropic-test-model
         force-mapping: true
+        thinking:
+          min: 1024
+          max: 32000
+          zero-allowed: true
+          dynamic-allowed: true
 llmgw:
   postgres-dsn-env: TEST_POSTGRES_DSN
   key-pepper-env: TEST_KEY_PEPPER

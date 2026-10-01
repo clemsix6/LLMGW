@@ -1,7 +1,7 @@
 package config
 
 import (
-	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	sdkconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 )
 
 // claudeOAuthChannel is the oauth-model-alias channel that covers Claude OAuth

@@ -10,6 +10,7 @@ import (
 	"github.com/clemsix6/LLMGW/internal/domain/contextedit"
 	"github.com/clemsix6/LLMGW/internal/domain/effort"
 	"github.com/clemsix6/LLMGW/internal/domain/governance"
+	"github.com/clemsix6/LLMGW/internal/domain/thinkingdisplay"
 	"github.com/clemsix6/LLMGW/internal/domain/toolprefix"
 	"github.com/gin-gonic/gin"
 )
@@ -27,13 +28,15 @@ type requestRewrite struct {
 	prefixToolNames   bool   // prefixToolNames rewrites the tool names the payload declares.
 	effortLevel       string // effortLevel is the thinking effort to inject, empty meaning none.
 	claimContextEdits bool   // claimContextEdits keeps context editing with the caller.
+	claimThinking     bool   // claimThinking keeps the thinking display with the caller.
 }
 
 // engaged reports whether any transformation applies. A request none applies to
 // keeps exactly today's path: its body is never read and nothing is allocated
 // on its behalf.
 func (r requestRewrite) engaged() bool {
-	return r.prefixToolNames || r.effortLevel != "" || r.claimContextEdits
+	return r.prefixToolNames || r.effortLevel != "" ||
+		r.claimContextEdits || r.claimThinking
 }
 
 // apply runs every engaged transformation over one payload, in one pass over
@@ -45,13 +48,16 @@ func (r requestRewrite) apply(payload []byte) []byte {
 	if r.claimContextEdits {
 		payload = contextedit.Claim(payload)
 	}
+	if r.claimThinking {
+		payload = thinkingdisplay.Claim(payload)
+	}
 	return effort.Apply(payload, r.effortLevel)
 }
 
 // resolveRequestRewrite decides what this request needs. The tool-name rewrite
 // applies to every project on both Anthropic payload routes, since count_tokens
 // must count the payload actually sent; the effort injection and the
-// context-editing claim cover generation alone — effort moves output tokens and
+// context-editing and thinking-display claims cover generation alone — effort moves output tokens and
 // cannot move the count count_tokens answers with, and only a generation
 // carries a prompt cache to protect.
 func resolveRequestRewrite(
@@ -68,6 +74,7 @@ func resolveRequestRewrite(
 	if request.URL.Path == messagesPath {
 		rewrite.effortLevel = identity.DefaultEffort
 		rewrite.claimContextEdits = true
+		rewrite.claimThinking = true
 	}
 	return rewrite
 }

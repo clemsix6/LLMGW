@@ -97,6 +97,7 @@ type UsageAttempt struct {
 	ResponseServiceTier string         // ResponseServiceTier is the observed pricing tier.
 	Failed              bool           // Failed reports whether the attempt failed.
 	UpstreamStatus      *int           // UpstreamStatus is the optional upstream HTTP status.
+	UpstreamError       *ErrorDetail   // UpstreamError is the optional error text of a 4xx upstream failure.
 	Latency             time.Duration  // Latency is the end-to-end upstream duration.
 	TTFT                time.Duration  // TTFT is the upstream time to first token.
 	CostUSD             *float64       // CostUSD is the optional priced cost in USD.

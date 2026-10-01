@@ -38,7 +38,7 @@ func deniedPath(path string) bool {
 	if path == "/" || path == "/management.html" {
 		return true
 	}
-	for _, prefix := range []string{"/v0/management", "/v0/resource/plugins"} {
+	for _, prefix := range []string{"/v0/management", "/v8/management", "/v0/resource/plugins"} {
 		if path == prefix || strings.HasPrefix(path, prefix+"/") {
 			return true
 		}
