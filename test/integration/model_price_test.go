@@ -34,6 +34,8 @@ WHERE model_pattern = $1 AND provider = '*'`
 		{pattern: "claude-opus-4-8-*", input: 5, output: 25, cacheRead: 0.5, cacheCreation: 6.25},
 		{pattern: "claude-opus-5-5", input: 4, output: 20, cacheRead: 0.20, cacheCreation: 5.00},
 		{pattern: "claude-opus-5-5-*", input: 4, output: 20, cacheRead: 0.20, cacheCreation: 5.00},
+		{pattern: "claude-sonnet-5-5", input: 2, output: 10, cacheRead: 0.20, cacheCreation: 2.50},
+		{pattern: "claude-sonnet-5-5-*", input: 2, output: 10, cacheRead: 0.20, cacheCreation: 2.50},
 	}
 
 	for _, want := range expected {
