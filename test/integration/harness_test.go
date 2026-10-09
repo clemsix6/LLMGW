@@ -59,6 +59,7 @@ type Harness struct {
 	container              *tcpostgres.PostgresContainer // container owns PostgreSQL 16.
 	db                     *pgxpool.Pool                 // db supports integration assertions.
 	root                   string                        // root holds temporary config and auth files.
+	catalogPath            string                        // catalogPath is the local model catalog the SDK loads at runtime.
 	logs                   *lockedBuffer                 // logs captures process logging safely.
 	secretMu               sync.Mutex                    // secretMu protects the shutdown leak registry.
 	secrets                map[string]struct{}           // secrets holds every sensitive Task 11 fixture.
@@ -123,7 +124,7 @@ func (h *Harness) startUpstreamAndFiles() error {
 		"upstream-account-a", "upstream-account-b",
 		"upstream-codex-account-a", "upstream-codex-account-b",
 		"upstream-codex-account-c", "upstream-codex-account-d",
-		"upstream-claude-account-a",
+		"upstream-claude-account-a", "upstream-claude-account-catalog",
 		"fixture-prompt", fixtureToolSecret, h.Upstream.URL(),
 		upstreamFailureSecret, upstreamHeaderSecret, "transient-failover-fixture",
 		"cooling-fixture", runtimeAccountSecret, "native-bypass", "attempted-management-key",
@@ -145,6 +146,10 @@ func (h *Harness) startUpstreamAndFiles() error {
 	}
 	h.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
 	h.ConfigPath = filepath.Join(root, "config.yaml")
+	h.catalogPath = filepath.Join(root, "models.json")
+	if err := writeModelCatalog(h.catalogPath); err != nil {
+		return err
+	}
 	if err := os.WriteFile(h.ConfigPath, h.configYAML(port), 0o600); err != nil {
 		return fmt.Errorf("write integration configuration:\n%w", err)
 	}
@@ -286,6 +291,8 @@ home:
   enabled: false
 pprof:
   enable: false
+models:
+  catalog: %q
 plugins:
   enabled: false
 routing:
@@ -353,13 +360,16 @@ claude-api-key:
           max: 32000
           zero-allowed: true
           dynamic-allowed: true
+  - api-key: upstream-claude-account-catalog
+    base-url: %q
 llmgw:
   postgres-dsn-env: TEST_POSTGRES_DSN
   key-pepper-env: TEST_KEY_PEPPER
   usage-retention-days: 35
   usage-outstanding-capacity: 2
-`, port, h.AuthDir, h.Upstream.URL()+"/v1",
-		h.Upstream.URL(), h.Upstream.URL(), h.Upstream.URL(), h.Upstream.URL(), h.Upstream.URL()))
+`, port, h.AuthDir, h.catalogPath, h.Upstream.URL()+"/v1",
+		h.Upstream.URL(), h.Upstream.URL(), h.Upstream.URL(), h.Upstream.URL(), h.Upstream.URL(),
+		h.Upstream.URL()))
 }
 
 // waitReady polls the public health endpoint without credentials.

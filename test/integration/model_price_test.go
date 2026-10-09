@@ -30,6 +30,8 @@ WHERE model_pattern = $1 AND provider = '*'`
 	expected := []seededListPrice{
 		{pattern: "claude-haiku-4-5", input: 1, output: 5, cacheRead: 0.1, cacheCreation: 1.25},
 		{pattern: "claude-haiku-4-5-*", input: 1, output: 5, cacheRead: 0.1, cacheCreation: 1.25},
+		{pattern: "claude-haiku-5-5", input: 0.10, output: 0.50, cacheRead: 0.01, cacheCreation: 0.125},
+		{pattern: "claude-haiku-5-5-*", input: 0.10, output: 0.50, cacheRead: 0.01, cacheCreation: 0.125},
 		{pattern: "claude-opus-4-8", input: 5, output: 25, cacheRead: 0.5, cacheCreation: 6.25},
 		{pattern: "claude-opus-4-8-*", input: 5, output: 25, cacheRead: 0.5, cacheCreation: 6.25},
 		{pattern: "claude-opus-5-5", input: 4, output: 20, cacheRead: 0.20, cacheCreation: 5.00},

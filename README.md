@@ -21,6 +21,12 @@ YAML only when the native SDK requires them, otherwise use your secret manager
 to render the file. PostgreSQL credentials and the project-key pepper remain
 environment/secret-manager values.
 
+The embedded SDK refreshes its model catalog from upstream at runtime, so a
+newly released model becomes routable without an LLMGW release; a failed
+refresh keeps the last valid catalog, and the catalog embedded in the pinned SDK
+version is the startup fallback. To pin the catalog, set `models.catalog` to an
+`http(s)` URL or an absolute file path; the SDK then reads only that source.
+
 ```sh
 cp config.example.yaml config.yaml
 cp .env.example .env
