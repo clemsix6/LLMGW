@@ -1,0 +1,24 @@
+-- Seeds claude-haiku-5-5 at Anthropic's published list prices (USD per
+-- million tokens): https://platform.claude.com/docs/en/about-claude/pricing.
+--
+-- The published rate for this model depends on prompt size and the schema
+-- carries a single flat rate per pattern, so the rate for the smaller prompt
+-- tier is seeded; requests in the larger tier are costed below their invoice
+-- until an operator overrides the row.
+--
+-- As with every Claude model already seeded, a served request can be reported
+-- under a dated sibling, so both patterns are seeded together the way 0023 did
+-- for the model before it. Cache-write is the 5-minute rate, which follows the
+-- 1.25x-input convention 0013 established for Claude models; cache-read is
+-- Anthropic's published rate for this model. ON CONFLICT keeps any hand-tuned
+-- price an operator already set.
+INSERT INTO model_price (
+    provider, model_pattern, service_tier,
+    input_per_million, output_per_million,
+    cache_read_per_million, cache_creation_per_million,
+    effective_from
+)
+VALUES
+    ('*', 'claude-haiku-5-5',   '*', 0.10, 0.50, 0.01, 0.125, '1970-01-01T00:00:00Z'::timestamptz),
+    ('*', 'claude-haiku-5-5-*', '*', 0.10, 0.50, 0.01, 0.125, '1970-01-01T00:00:00Z'::timestamptz)
+ON CONFLICT (provider, model_pattern, service_tier, effective_from) DO NOTHING;
