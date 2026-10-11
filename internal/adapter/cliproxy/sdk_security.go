@@ -29,6 +29,7 @@ func buildSecureSDKWithAfterStart(
 	armUpstreamFailureRedaction()
 	clear := RegisterExclusiveAccess(provider)
 	enforceExclusiveAccess(manager, provider)
+	registerServingTokenStore()
 	builder.WithConfig(cfg).
 		WithRequestAccessManager(manager).
 		WithWatcherFactory(disabledWatcherFactory).

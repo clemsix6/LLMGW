@@ -98,6 +98,7 @@ configuration:
 llmgw auth login claude
 llmgw auth list
 llmgw auth import-legacy
+llmgw auth priority claude-main@example.com.json 10
 
 llmgw key create analytics --name claude-code
 llmgw key list analytics
@@ -125,6 +126,30 @@ their normal API-key setting; set that API-key value to the project key issued
 for that deployed client. The embedded SDK serves its supported provider
 protocol routes, including Anthropic Messages, OpenAI Chat
 Completions/Responses, and Gemini where configured.
+
+### Priority accounts
+
+A credential can carry a priority tier. The highest available tier takes all
+the traffic; a lower tier is used only while every account above it is
+unavailable (cooldown, quota, disabled). Accounts in the same tier share load
+round-robin, per conversation while `session-affinity` is on. Without a
+priority every account sits in the same tier.
+
+With `session-affinity` on, as shipped, a conversation stays on the account it
+is bound to for as long as that account remains available. New conversations go
+to the highest available tier at once, but one that started on, or moved to, a
+lower-tier account during an outage stays there after the higher tier recovers.
+
+```sh
+llmgw auth list
+llmgw auth priority ID N
+```
+
+`ID` is the `id` shown by `auth list`, `N` an integer: a higher number wins,
+`0` clears the priority, and a negative number makes a last-resort account. The
+change is read when the server starts, and a running server would overwrite the
+file when it refreshes a token, so the command refuses while one runs. Stop the
+server, set the priority, start it again.
 
 ## Projects
 

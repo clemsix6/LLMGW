@@ -75,6 +75,13 @@ func (s *StubUpstream) Bodies() [][]byte {
 	return append([][]byte(nil), s.bodies...)
 }
 
+// Authorizations returns the Authorization header of every upstream request, in arrival order.
+func (s *StubUpstream) Authorizations() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.authorizations...)
+}
+
 // serveHTTP captures account selection, the request body, and returns the next fixture.
 func (s *StubUpstream) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	body, _ := io.ReadAll(request.Body)

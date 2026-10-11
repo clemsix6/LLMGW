@@ -127,7 +127,8 @@ func (h *Harness) startUpstreamAndFiles() error {
 		"upstream-claude-account-a", "upstream-claude-account-catalog",
 		"fixture-prompt", fixtureToolSecret, h.Upstream.URL(),
 		upstreamFailureSecret, upstreamHeaderSecret, "transient-failover-fixture",
-		"cooling-fixture", runtimeAccountSecret, "native-bypass", "attempted-management-key",
+		"cooling-fixture", runtimeAccountSecret,
+		priorityMainToken, prioritySpareAToken, prioritySpareBToken, "native-bypass", "attempted-management-key",
 	)
 
 	root, err := os.MkdirTemp("", "llmgw-integration-")
@@ -138,6 +139,10 @@ func (h *Harness) startUpstreamAndFiles() error {
 	h.AuthDir = filepath.Join(root, "auth")
 	if err := os.Mkdir(h.AuthDir, 0o700); err != nil {
 		return fmt.Errorf("create integration auth directory:\n%w", err)
+	}
+
+	if err := writePriorityAuthFiles(h.AuthDir, h.Upstream.URL()); err != nil {
+		return err
 	}
 
 	port, err := freePort()

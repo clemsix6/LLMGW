@@ -25,6 +25,8 @@ type AuthInfo struct {
 	Provider string
 	Label    string
 	Disabled bool
+	// Priority is the routing tier read from the credential file; zero means none is set.
+	Priority int
 }
 
 // LegacyImport is the non-secret outcome of attempting one legacy credential export.
@@ -97,7 +99,7 @@ func ListAuth(ctx context.Context, authDir string) ([]AuthInfo, error) {
 		if auth == nil {
 			continue
 		}
-		infos = append(infos, AuthInfo{ID: auth.ID, Provider: auth.Provider, Label: auth.Label, Disabled: auth.Disabled})
+		infos = append(infos, authInfoOf(auth))
 	}
 	sort.Slice(infos, func(left, right int) bool {
 		if infos[left].ID != infos[right].ID {
