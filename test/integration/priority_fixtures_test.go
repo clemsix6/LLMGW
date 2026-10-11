@@ -67,11 +67,12 @@ func priorityUsageResponse() StubResponse {
 	return codexUsageResponse(priorityModel)
 }
 
-// priorityRateLimit is the upstream 429 that cools one account down.
+// priorityRateLimit is the upstream 429 that cools one account down: the body is one the xAI
+// executor maps to an exhausted quota, which keeps the account in a long cooldown.
 func priorityRateLimit() StubResponse {
 	return StubResponse{
 		Status:  http.StatusTooManyRequests,
-		Headers: http.Header{"Content-Type": []string{"application/json"}, "Retry-After": []string{"3600"}},
-		Body:    `{"error":{"message":"priority fixture","type":"rate_limit_error"}}`,
+		Headers: http.Header{"Content-Type": []string{"application/json"}},
+		Body:    `{"code":"subscription:free-usage-exhausted","error":"priority fixture"}`,
 	}
 }

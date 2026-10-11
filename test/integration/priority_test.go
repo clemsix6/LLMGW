@@ -58,7 +58,8 @@ func TestPriorityAccountTakesTrafficThenFallsBack(t *testing.T) {
 	}
 
 	// The priority account answers 429; the SDK retries the same call on another
-	// account, which serves it. The 429 carries a Retry-After, so the cooldown outlasts the rest of the test.
+	// account, which serves it. The rate limit is one the provider reports as an exhausted quota, so the
+	// account stays in cooldown for the rest of the test.
 	testHarness.Upstream.Enqueue(priorityRateLimit(), priorityUsageResponse())
 	if status := priorityGeneration(t, created.Plaintext, prioritized); status != http.StatusOK {
 		t.Fatalf("failover request status = %d, want 200", status)

@@ -163,6 +163,7 @@ func (f *priorityFixture) callSession(t *testing.T, session string) string {
 	return served[0]
 }
 
+// TestServingStoreRoutesToPriorityAccount requires every call to land on the priority account.
 func TestServingStoreRoutesToPriorityAccount(t *testing.T) {
 	dir := t.TempDir()
 	fixture := newPriorityFixture(t, newServingTokenStoreFor(dir), dir, &coreauth.RoundRobinSelector{})
@@ -174,6 +175,7 @@ func TestServingStoreRoutesToPriorityAccount(t *testing.T) {
 	}
 }
 
+// TestServingStoreFallsBackToRoundRobinWhileRateLimited requires the lower tier to serve while the priority account is rate limited.
 func TestServingStoreFallsBackToRoundRobinWhileRateLimited(t *testing.T) {
 	dir := t.TempDir()
 	fixture := newPriorityFixture(t, newServingTokenStoreFor(dir), dir, &coreauth.RoundRobinSelector{})
@@ -204,7 +206,8 @@ func TestServingStoreFallsBackToRoundRobinWhileRateLimited(t *testing.T) {
 	}
 }
 
-// The SDK floors 429 cooldowns well above a test-friendly wait, so recovery is driven through a
+// TestServingStoreReturnsToPriorityAccountAfterCooldown requires the priority account to resume
+// after a cooldown. The SDK floors 429 cooldowns well above a test-friendly wait, so recovery is driven through a
 // transient server error, which honours the retry-after hint exactly and takes the same
 // availability path back to the highest tier.
 func TestServingStoreReturnsToPriorityAccountAfterCooldown(t *testing.T) {
@@ -229,7 +232,7 @@ func TestServingStoreReturnsToPriorityAccountAfterCooldown(t *testing.T) {
 	}
 }
 
-// With session affinity on, as shipped, a conversation stays on its bound account while that
+// TestServingStoreSessionAffinityKeepsBindingAfterRecovery covers session affinity: with it on, as shipped, a conversation stays on its bound account while that
 // account remains available, so only new conversations return to the recovered priority account.
 func TestServingStoreSessionAffinityKeepsBindingAfterRecovery(t *testing.T) {
 	dir := t.TempDir()
@@ -262,11 +265,14 @@ func TestServingStoreSessionAffinityKeepsBindingAfterRecovery(t *testing.T) {
 	if got := fixture.callSession(t, "conversation-b"); got != spareB {
 		t.Fatalf("conversation B after recovery on %q, want its bound %q", got, spareB)
 	}
-	if got := fixture.callSession(t, "conversation-c"); got != fixture.priority {
-		t.Fatalf("new conversation C on %q, want priority account %q", got, fixture.priority)
+	for _, session := range []string{"conversation-c", "conversation-d", "conversation-e", "conversation-f"} {
+		if got := fixture.callSession(t, session); got != fixture.priority {
+			t.Fatalf("new %s on %q, want priority account %q", session, got, fixture.priority)
+		}
 	}
 }
 
+// TestServingStoreKeepsPriorityAcrossCredentialRewrite requires a rewritten credential file to keep its priority.
 func TestServingStoreKeepsPriorityAcrossCredentialRewrite(t *testing.T) {
 	dir := t.TempDir()
 	name := writeClaudeAuthFile(t, dir, "main", map[string]any{"priority": 7})
@@ -281,14 +287,7 @@ func TestServingStoreKeepsPriorityAcrossCredentialRewrite(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(dir, name))
-	if err != nil {
-		t.Fatalf("read auth file: %v", err)
-	}
-	var stored map[string]any
-	if err := json.Unmarshal(raw, &stored); err != nil {
-		t.Fatalf("decode auth file: %v", err)
-	}
+	stored := readAuthJSON(t, dir, name)
 	if stored["priority"] != float64(7) || stored["access_token"] != "refreshed" {
 		t.Fatalf("rewritten file = %v, want priority kept and token refreshed", stored)
 	}

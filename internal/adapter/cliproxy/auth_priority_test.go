@@ -23,6 +23,7 @@ func readAuthJSON(t *testing.T, dir, name string) map[string]any {
 	return decoded
 }
 
+// TestSetAuthPrioritySetsAndReportsValue sets a priority and reports the stored value.
 func TestSetAuthPrioritySetsAndReportsValue(t *testing.T) {
 	dir := t.TempDir()
 	name := writeClaudeAuthFile(t, dir, "main", nil)
@@ -43,6 +44,7 @@ func TestSetAuthPrioritySetsAndReportsValue(t *testing.T) {
 	}
 }
 
+// TestSetAuthPriorityZeroRemovesKey removes the priority key when the value is zero.
 func TestSetAuthPriorityZeroRemovesKey(t *testing.T) {
 	dir := t.TempDir()
 	name := writeClaudeAuthFile(t, dir, "main", map[string]any{"priority": 9})
@@ -59,6 +61,7 @@ func TestSetAuthPriorityZeroRemovesKey(t *testing.T) {
 	}
 }
 
+// TestSetAuthPriorityUnknownIDFailsWithoutLeakingSecrets fails on an unknown credential id without leaking secrets.
 func TestSetAuthPriorityUnknownIDFailsWithoutLeakingSecrets(t *testing.T) {
 	dir := t.TempDir()
 	writeClaudeAuthFile(t, dir, "main", nil)
@@ -72,6 +75,7 @@ func TestSetAuthPriorityUnknownIDFailsWithoutLeakingSecrets(t *testing.T) {
 	}
 }
 
+// TestSetAuthPriorityPreservesOtherKeysAndMode keeps the other keys and the file mode of the credential.
 func TestSetAuthPriorityPreservesOtherKeysAndMode(t *testing.T) {
 	dir := t.TempDir()
 	name := writeClaudeAuthFile(t, dir, "main", map[string]any{
@@ -97,6 +101,7 @@ func TestSetAuthPriorityPreservesOtherKeysAndMode(t *testing.T) {
 	}
 }
 
+// TestListAuthReportsZeroForMissingOrInvalidPriority reports zero for a missing or invalid priority.
 func TestListAuthReportsZeroForMissingOrInvalidPriority(t *testing.T) {
 	dir := t.TempDir()
 	writeClaudeAuthFile(t, dir, "none", nil)
@@ -138,6 +143,7 @@ func mustMarshal(t *testing.T, value any) string {
 	return string(raw)
 }
 
+// TestSetAuthPriorityOnDisabledCredentialKeepsItDisabled keeps a disabled credential disabled.
 func TestSetAuthPriorityOnDisabledCredentialKeepsItDisabled(t *testing.T) {
 	dir := t.TempDir()
 	name := writeClaudeAuthFile(t, dir, "off", map[string]any{"disabled": true})
