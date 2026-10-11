@@ -3,9 +3,11 @@ package command
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 
 	"github.com/clemsix6/LLMGW/internal/adapter/cliproxy"
@@ -39,6 +41,11 @@ func runAuth(ctx context.Context, args []string, streams Streams) error {
 
 type authLeaf func(context.Context, config.Config, Streams) error
 
+type authPriorityArguments struct {
+	id       string
+	priority int
+}
+
 type authLoginArguments struct {
 	provider     string
 	noBrowser    bool
@@ -67,6 +74,14 @@ func parseAuthLeaf(args []string, streams Streams) (authLeaf, error) {
 			return nil, err
 		}
 		return runAuthImportLegacy, nil
+	case "priority":
+		parsed, err := parseAuthPriority(args[1:], streams)
+		if err != nil {
+			return nil, err
+		}
+		return func(ctx context.Context, cfg config.Config, streams Streams) error {
+			return runAuthPriority(ctx, cfg, parsed, streams)
+		}, nil
 	default:
 		return nil, authUsage(streams, fmt.Sprintf("unknown auth command %q", args[0]))
 	}
@@ -88,6 +103,24 @@ func parseAuthLogin(args []string, streams Streams) (authLoginArguments, error) 
 	return authLoginArguments{
 		provider: provider, noBrowser: *noBrowser, callbackPort: *callbackPort, device: *device,
 	}, nil
+}
+
+// parseAuthPriority validates the credential ID and the integer priority.
+// A negative priority is a last-resort tier and zero clears the priority.
+func parseAuthPriority(args []string, streams Streams) (authPriorityArguments, error) {
+	flags := flag.NewFlagSet("auth priority", flag.ContinueOnError)
+	flags.SetOutput(streams.Err)
+	if err := flags.Parse(args); err != nil {
+		return authPriorityArguments{}, err
+	}
+	if flags.NArg() != 2 {
+		return authPriorityArguments{}, authUsage(streams, "auth priority requires ID and N")
+	}
+	priority, err := strconv.Atoi(flags.Arg(1))
+	if err != nil {
+		return authPriorityArguments{}, authUsage(streams, "auth priority N must be an integer")
+	}
+	return authPriorityArguments{id: flags.Arg(0), priority: priority}, nil
 }
 
 func parseAuthNoArguments(name string, args []string, streams Streams) error {
@@ -137,9 +170,54 @@ func runAuthList(ctx context.Context, cfg config.Config, streams Streams) error 
 		return fmt.Errorf("list auth:\n%w", err)
 	}
 	for _, auth := range auths {
-		if _, err := fmt.Fprintf(streams.Out, "id\t%s\nprovider\t%s\nlabel\t%s\ndisabled\t%t\n", auth.ID, auth.Provider, auth.Label, auth.Disabled); err != nil {
+		if err := printAuthInfo(streams.Out, auth); err != nil {
 			return fmt.Errorf("write auth list:\n%w", err)
 		}
+	}
+	return nil
+}
+
+// runAuthPriority writes one credential's priority while holding the serve lock,
+// so no running server can overwrite the file with its in-memory copy.
+func runAuthPriority(
+	ctx context.Context,
+	cfg config.Config,
+	args authPriorityArguments,
+	streams Streams,
+) error {
+	dsn, err := cfg.DatabaseDSN(streams.Getenv)
+	if err != nil {
+		return fmt.Errorf("resolve auth database:\n%w", err)
+	}
+	store, err := postgres.New(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("open auth store:\n%w", err)
+	}
+	defer store.Close()
+	lock, err := store.AcquireServeLock(ctx)
+	if errors.Is(err, postgres.ErrServeLockHeld) {
+		return errors.New("auth priority refused: llmgw serve is running and would overwrite the change; stop the server, run the command, then start it again")
+	}
+	if err != nil {
+		return fmt.Errorf("lock auth priority:\n%w", err)
+	}
+	defer lock.Release(context.WithoutCancel(ctx))
+	info, err := cliproxy.SetAuthPriority(ctx, cfg.Proxy.AuthDir, args.id, args.priority)
+	if err != nil {
+		return err
+	}
+	return printAuthInfo(streams.Out, info)
+}
+
+// printAuthInfo writes one credential in the tab-separated form of auth list.
+func printAuthInfo(out io.Writer, auth cliproxy.AuthInfo) error {
+	_, err := fmt.Fprintf(
+		out,
+		"id\t%s\nprovider\t%s\nlabel\t%s\ndisabled\t%t\npriority\t%d\n",
+		auth.ID, auth.Provider, auth.Label, auth.Disabled, auth.Priority,
+	)
+	if err != nil {
+		return fmt.Errorf("write auth info:\n%w", err)
 	}
 	return nil
 }
@@ -215,6 +293,7 @@ func authPrompt(streams Streams) func(string) (string, error) {
 }
 
 func authUsage(streams Streams, message string) error {
-	fmt.Fprintln(streams.Err, "usage: auth {login|list|import-legacy}")
+	fmt.Fprintln(streams.Err, "usage: auth {login|list|import-legacy|priority ID N}")
+	fmt.Fprintln(streams.Err, "  priority sets a credential's routing tier (0 clears, negative is last resort); it applies at the next serve start and is refused while a server runs")
 	return fmt.Errorf("%s", message)
 }
