@@ -41,9 +41,10 @@ func runAuth(ctx context.Context, args []string, streams Streams) error {
 
 type authLeaf func(context.Context, config.Config, Streams) error
 
+// authPriorityArguments holds the parsed arguments of auth priority.
 type authPriorityArguments struct {
-	id       string
-	priority int
+	id       string // id is the credential ID as shown by auth list
+	priority int    // priority is the requested tier; zero clears it
 }
 
 type authLoginArguments struct {
@@ -184,7 +185,7 @@ func runAuthPriority(
 	cfg config.Config,
 	args authPriorityArguments,
 	streams Streams,
-) error {
+) (returnErr error) {
 	dsn, err := cfg.DatabaseDSN(streams.Getenv)
 	if err != nil {
 		return fmt.Errorf("resolve auth database:\n%w", err)
@@ -201,7 +202,13 @@ func runAuthPriority(
 	if err != nil {
 		return fmt.Errorf("lock auth priority:\n%w", err)
 	}
-	defer lock.Release(context.WithoutCancel(ctx))
+	defer func() {
+		releaseCtx, cancel := context.WithTimeout(context.Background(), serveLockReleaseTimeout)
+		defer cancel()
+		if err := lock.Release(releaseCtx); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("release auth priority lock:\n%w", err))
+		}
+	}()
 	info, err := cliproxy.SetAuthPriority(ctx, cfg.Proxy.AuthDir, args.id, args.priority)
 	if err != nil {
 		return err

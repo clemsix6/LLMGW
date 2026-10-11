@@ -71,7 +71,7 @@ func priorityUsageResponse() StubResponse {
 func priorityRateLimit() StubResponse {
 	return StubResponse{
 		Status:  http.StatusTooManyRequests,
-		Headers: http.Header{"Content-Type": []string{"application/json"}},
+		Headers: http.Header{"Content-Type": []string{"application/json"}, "Retry-After": []string{"3600"}},
 		Body:    `{"error":{"message":"priority fixture","type":"rate_limit_error"}}`,
 	}
 }

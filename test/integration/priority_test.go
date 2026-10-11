@@ -28,7 +28,7 @@ func priorityGeneration(t *testing.T, plaintext string, sequence int) int {
 	return status
 }
 
-// servedBy returns the credentials the stub saw after the first n requests.
+// servedBy returns the credentials the stub saw after the first already requests.
 func servedBy(t *testing.T, already int) []string {
 	t.Helper()
 	all := testHarness.Upstream.Authorizations()
@@ -58,7 +58,7 @@ func TestPriorityAccountTakesTrafficThenFallsBack(t *testing.T) {
 	}
 
 	// The priority account answers 429; the SDK retries the same call on another
-	// account, which serves it. The cooldown outlasts the rest of the test.
+	// account, which serves it. The 429 carries a Retry-After, so the cooldown outlasts the rest of the test.
 	testHarness.Upstream.Enqueue(priorityRateLimit(), priorityUsageResponse())
 	if status := priorityGeneration(t, created.Plaintext, prioritized); status != http.StatusOK {
 		t.Fatalf("failover request status = %d, want 200", status)

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 
 	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
@@ -13,21 +12,21 @@ import (
 // priorityMetadataKey is the credential-file key the SDK selector reads as the routing tier.
 const priorityMetadataKey = "priority"
 
-// metadataPriority reads a credential file's priority with the SDK's validity rules:
-// a number, or a string holding an integer; anything else counts as no priority.
+// metadataPriority returns the routing tier the SDK derives from a credential file's metadata,
+// by running the SDK's own parser on a throwaway auth so the listed auth is never touched.
+// A missing or invalid priority counts as zero.
 func metadataPriority(metadata map[string]any) int {
-	switch value := metadata[priorityMetadataKey].(type) {
-	case float64:
-		return int(value)
-	case string:
-		priority, err := strconv.Atoi(strings.TrimSpace(value))
-		if err != nil {
-			return 0
-		}
-		return priority
-	default:
+	raw, present := metadata[priorityMetadataKey]
+	if !present {
 		return 0
 	}
+	probe := &coreauth.Auth{}
+	coreauth.ApplyAuthPriorityMetadata(probe, map[string]any{priorityMetadataKey: raw})
+	priority, err := strconv.Atoi(probe.Attributes[priorityMetadataKey])
+	if err != nil {
+		return 0
+	}
+	return priority
 }
 
 // authInfoOf projects one loaded auth to its non-secret operator view.
@@ -56,9 +55,13 @@ func SetAuthPriority(ctx context.Context, authDir, id string, priority int) (Aut
 		return AuthInfo{}, err
 	}
 	updated := withPriority(auth, priority)
-	if _, err := store.Save(ctx, updated); err != nil {
+	// Creation intent is required because the stage directory starts empty: without it the SDK
+	// store skips saving a disabled credential whose file it does not find there. This rewrites an
+	// existing operator-owned file, so nothing new is created.
+	if _, err := store.Save(coreauth.WithAuthCreationIntent(ctx), updated); err != nil {
 		return AuthInfo{}, fmt.Errorf("set auth priority: save failed:\n%w", err)
 	}
+	// The SDK parser ignores a Go int, so the written value is reported directly.
 	info := authInfoOf(updated)
 	info.Priority = priority
 	return info, nil

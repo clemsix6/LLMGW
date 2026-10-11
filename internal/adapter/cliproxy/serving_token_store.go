@@ -9,8 +9,8 @@ import (
 )
 
 // servingTokenStore is the SDK file store used while serving. The SDK applies a credential's
-// file-level routing hints only from its file watcher, which LLMGW disables, so the store
-// applies them itself when the manager loads credentials. Everything else is the plain
+// file-level priority only from its file watcher, which LLMGW disables, so the store
+// applies the priority itself when the manager loads credentials. Everything else is the plain
 // SDK file store, including its optional interfaces.
 type servingTokenStore struct {
 	*sdkauth.FileTokenStore

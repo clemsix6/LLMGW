@@ -23,25 +23,30 @@ const (
 
 // stubUpstreamError is an upstream failure carrying the retry-after hint the SDK turns into a cooldown.
 type stubUpstreamError struct {
-	status     int
-	retryAfter time.Duration
+	status     int           // status is the HTTP status the failure reports
+	retryAfter time.Duration // retryAfter is the cooldown hint attached to the failure
 }
 
+// Error implements error.
 func (e *stubUpstreamError) Error() string { return "upstream failure" }
 
+// StatusCode reports the HTTP status the SDK classifies the failure by.
 func (e *stubUpstreamError) StatusCode() int { return e.status }
 
+// RetryAfter reports the cooldown hint the SDK honours for transient failures.
 func (e *stubUpstreamError) RetryAfter() *time.Duration { return &e.retryAfter }
 
 // recordingExecutor records which auth served each call and can fail chosen auths.
 type recordingExecutor struct {
-	mu      sync.Mutex
-	served  []string
-	failing map[string]*stubUpstreamError
+	mu      sync.Mutex                    // mu guards served and failing
+	served  []string                      // served lists the auth IDs that answered, in order
+	failing map[string]*stubUpstreamError // failing maps an auth ID to the failure it returns
 }
 
+// Identifier returns the provider the executor serves.
 func (e *recordingExecutor) Identifier() string { return priorityTestProvider }
 
+// Execute records the serving auth, or returns the failure configured for it.
 func (e *recordingExecutor) Execute(_ context.Context, auth *coreauth.Auth, _ sdkexecutor.Request, _ sdkexecutor.Options) (sdkexecutor.Response, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -52,18 +57,22 @@ func (e *recordingExecutor) Execute(_ context.Context, auth *coreauth.Auth, _ sd
 	return sdkexecutor.Response{Payload: []byte("{}")}, nil
 }
 
+// ExecuteStream is unused by these tests.
 func (e *recordingExecutor) ExecuteStream(context.Context, *coreauth.Auth, sdkexecutor.Request, sdkexecutor.Options) (*sdkexecutor.StreamResult, error) {
 	return nil, nil
 }
 
+// Refresh returns the auth unchanged.
 func (e *recordingExecutor) Refresh(_ context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
 	return auth, nil
 }
 
+// CountTokens is unused by these tests.
 func (e *recordingExecutor) CountTokens(context.Context, *coreauth.Auth, sdkexecutor.Request, sdkexecutor.Options) (sdkexecutor.Response, error) {
 	return sdkexecutor.Response{}, nil
 }
 
+// HttpRequest is unused by these tests.
 func (e *recordingExecutor) HttpRequest(context.Context, *coreauth.Auth, *http.Request) (*http.Response, error) {
 	return nil, nil
 }
@@ -104,13 +113,15 @@ func writeClaudeAuthFile(t *testing.T, dir, email string, extra map[string]any) 
 
 // priorityFixture is a manager loaded from three Claude files, one of them prioritised.
 type priorityFixture struct {
-	manager  *coreauth.Manager
-	executor *recordingExecutor
-	priority string
-	others   []string
+	manager  *coreauth.Manager  // manager is the SDK manager under test
+	executor *recordingExecutor // executor records which auth served each call
+	priority string             // priority is the ID of the prioritised credential
+	others   []string           // others are the IDs of the unprioritised credentials
 }
 
-func newPriorityFixture(t *testing.T, store coreauth.Store, dir string) *priorityFixture {
+// newPriorityFixture writes the three credential files into dir and loads a manager
+// over store that routes with the given selector.
+func newPriorityFixture(t *testing.T, store coreauth.Store, dir string, selector coreauth.Selector) *priorityFixture {
 	t.Helper()
 	priority := writeClaudeAuthFile(t, dir, "main", map[string]any{"priority": 10})
 	others := []string{
@@ -118,7 +129,7 @@ func newPriorityFixture(t *testing.T, store coreauth.Store, dir string) *priorit
 		writeClaudeAuthFile(t, dir, "spare-b", nil),
 	}
 	executor := &recordingExecutor{failing: map[string]*stubUpstreamError{}}
-	manager := coreauth.NewManager(store, &coreauth.RoundRobinSelector{}, nil)
+	manager := coreauth.NewManager(store, selector, nil)
 	manager.RegisterExecutor(executor)
 	if err := manager.Load(context.Background()); err != nil {
 		t.Fatalf("load manager: %v", err)
@@ -130,8 +141,19 @@ func newPriorityFixture(t *testing.T, store coreauth.Store, dir string) *priorit
 // call drives one request through the manager and returns the auth that served it.
 func (f *priorityFixture) call(t *testing.T) string {
 	t.Helper()
+	return f.callSession(t, "")
+}
+
+// callSession drives one request of the given conversation and returns the auth that served it.
+// An empty session sends no conversation identity.
+func (f *priorityFixture) callSession(t *testing.T, session string) string {
+	t.Helper()
 	request := sdkexecutor.Request{Model: priorityTestModel, Payload: []byte("{}")}
-	if _, err := f.manager.Execute(context.Background(), []string{priorityTestProvider}, request, sdkexecutor.Options{}); err != nil {
+	options := sdkexecutor.Options{}
+	if session != "" {
+		options.Metadata = map[string]any{sdkexecutor.DerivedSessionIDMetadataKey: session}
+	}
+	if _, err := f.manager.Execute(context.Background(), []string{priorityTestProvider}, request, options); err != nil {
 		t.Fatalf("execute: %v", err)
 	}
 	served := f.executor.take()
@@ -143,7 +165,7 @@ func (f *priorityFixture) call(t *testing.T) string {
 
 func TestServingStoreRoutesToPriorityAccount(t *testing.T) {
 	dir := t.TempDir()
-	fixture := newPriorityFixture(t, newServingTokenStoreFor(dir), dir)
+	fixture := newPriorityFixture(t, newServingTokenStoreFor(dir), dir, &coreauth.RoundRobinSelector{})
 
 	for i := 0; i < 6; i++ {
 		if got := fixture.call(t); got != fixture.priority {
@@ -154,7 +176,14 @@ func TestServingStoreRoutesToPriorityAccount(t *testing.T) {
 
 func TestServingStoreFallsBackToRoundRobinWhileRateLimited(t *testing.T) {
 	dir := t.TempDir()
-	fixture := newPriorityFixture(t, newServingTokenStoreFor(dir), dir)
+	fixture := newPriorityFixture(t, newServingTokenStoreFor(dir), dir, &coreauth.RoundRobinSelector{})
+
+	// Round-robin over every account could not keep a run of calls on one of them.
+	for i := 0; i < 4; i++ {
+		if got := fixture.call(t); got != fixture.priority {
+			t.Fatalf("call %d before the failure served by %q, want priority account %q", i, got, fixture.priority)
+		}
+	}
 	fixture.executor.setFailure(fixture.priority, &stubUpstreamError{status: http.StatusTooManyRequests, retryAfter: time.Minute})
 
 	// The rate-limited priority attempt falls through to a lower tier within the same call.
@@ -180,7 +209,7 @@ func TestServingStoreFallsBackToRoundRobinWhileRateLimited(t *testing.T) {
 // availability path back to the highest tier.
 func TestServingStoreReturnsToPriorityAccountAfterCooldown(t *testing.T) {
 	dir := t.TempDir()
-	fixture := newPriorityFixture(t, newServingTokenStoreFor(dir), dir)
+	fixture := newPriorityFixture(t, newServingTokenStoreFor(dir), dir, &coreauth.RoundRobinSelector{})
 	fixture.executor.setFailure(fixture.priority, &stubUpstreamError{status: http.StatusServiceUnavailable, retryAfter: priorityTestCooldown})
 
 	if got := fixture.call(t); got == fixture.priority {
@@ -192,8 +221,49 @@ func TestServingStoreReturnsToPriorityAccountAfterCooldown(t *testing.T) {
 	}
 
 	time.Sleep(priorityTestCooldown + 300*time.Millisecond)
-	if got := fixture.call(t); got != fixture.priority {
-		t.Fatalf("after cooldown served by %q, want priority account %q", got, fixture.priority)
+	// Round-robin could not keep a run of calls on one account.
+	for i := 0; i < 4; i++ {
+		if got := fixture.call(t); got != fixture.priority {
+			t.Fatalf("call %d after cooldown served by %q, want priority account %q", i, got, fixture.priority)
+		}
+	}
+}
+
+// With session affinity on, as shipped, a conversation stays on its bound account while that
+// account remains available, so only new conversations return to the recovered priority account.
+func TestServingStoreSessionAffinityKeepsBindingAfterRecovery(t *testing.T) {
+	dir := t.TempDir()
+	// The SDK's own public constructor; the configuration path that builds it is unexported.
+	affinity := coreauth.NewSessionAffinitySelectorWithConfig(coreauth.SessionAffinityConfig{
+		Fallback: &coreauth.RoundRobinSelector{},
+		TTL:      time.Hour,
+	})
+	defer affinity.Stop()
+	fixture := newPriorityFixture(t, newServingTokenStoreFor(dir), dir, affinity)
+
+	if got := fixture.callSession(t, "conversation-a"); got != fixture.priority {
+		t.Fatalf("conversation A started on %q, want priority account %q", got, fixture.priority)
+	}
+	fixture.executor.setFailure(fixture.priority, &stubUpstreamError{status: http.StatusServiceUnavailable, retryAfter: priorityTestCooldown})
+	spareA := fixture.callSession(t, "conversation-a")
+	if spareA == fixture.priority {
+		t.Fatalf("conversation A stayed on the failing priority account")
+	}
+	fixture.executor.setFailure(fixture.priority, nil)
+	spareB := fixture.callSession(t, "conversation-b")
+	if spareB == fixture.priority {
+		t.Fatalf("conversation B landed on the priority account during its cooldown")
+	}
+
+	time.Sleep(priorityTestCooldown + 300*time.Millisecond)
+	if got := fixture.callSession(t, "conversation-a"); got != spareA {
+		t.Fatalf("conversation A after recovery on %q, want its bound %q", got, spareA)
+	}
+	if got := fixture.callSession(t, "conversation-b"); got != spareB {
+		t.Fatalf("conversation B after recovery on %q, want its bound %q", got, spareB)
+	}
+	if got := fixture.callSession(t, "conversation-c"); got != fixture.priority {
+		t.Fatalf("new conversation C on %q, want priority account %q", got, fixture.priority)
 	}
 }
 

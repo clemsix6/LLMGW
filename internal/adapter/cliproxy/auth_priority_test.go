@@ -118,6 +118,7 @@ func TestListAuthReportsZeroForMissingOrInvalidPriority(t *testing.T) {
 	}
 }
 
+// containsAny reports whether text contains any non-empty needle.
 func containsAny(text string, needles ...string) bool {
 	for _, needle := range needles {
 		if len(needle) > 0 && strings.Contains(text, needle) {
@@ -127,6 +128,7 @@ func containsAny(text string, needles ...string) bool {
 	return false
 }
 
+// mustMarshal returns the JSON encoding of value, failing the test when it cannot be encoded.
 func mustMarshal(t *testing.T, value any) string {
 	t.Helper()
 	raw, err := json.Marshal(value)
@@ -134,4 +136,21 @@ func mustMarshal(t *testing.T, value any) string {
 		t.Fatalf("marshal: %v", err)
 	}
 	return string(raw)
+}
+
+func TestSetAuthPriorityOnDisabledCredentialKeepsItDisabled(t *testing.T) {
+	dir := t.TempDir()
+	name := writeClaudeAuthFile(t, dir, "off", map[string]any{"disabled": true})
+
+	info, err := SetAuthPriority(context.Background(), dir, name, 6)
+	if err != nil {
+		t.Fatalf("set priority: %v", err)
+	}
+	if !info.Disabled || info.Priority != 6 {
+		t.Fatalf("info = %+v, want disabled with priority 6", info)
+	}
+	stored := readAuthJSON(t, dir, name)
+	if stored["priority"] != float64(6) || stored["disabled"] != true {
+		t.Fatalf("stored file = %v, want priority 6 and disabled kept", stored)
+	}
 }
