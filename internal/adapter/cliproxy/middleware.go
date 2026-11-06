@@ -223,11 +223,6 @@ func (m *Middleware) admit(
 		c.Request = c.Request.WithContext(requestContext)
 	}
 	defer m.complete(c, identity)
-	// Client responses are always identity-encoded. The SDK negotiates response
-	// compression beneath the wrappers installed below: handed compressed bytes,
-	// the tool-name strip and the markup screen would find nothing to act on,
-	// and a stream would be held whole instead of relayed event by event.
-	c.Request.Header.Del("Accept-Encoding")
 	if finalizeResponse := installToolPrefixWriter(c); finalizeResponse != nil {
 		// Registered after complete so LIFO runs it first: the rewritten response
 		// must be fully on the wire before completion records the status it ended on.

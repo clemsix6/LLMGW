@@ -11,10 +11,11 @@ import (
 
 // TestResponsesStayIdentityEncoded proves a client advertising compression
 // still receives a plain response its tool names were stripped from. The
-// embedded SDK negotiates compression beneath LLMGW's response wrappers, so a
-// compressed body would reach the client with the prefix still on every name.
-// The request sets Accept-Encoding itself, which stops the Go transport from
-// decompressing transparently: a compressed response stays visible here.
+// embedded SDK compresses beneath LLMGW's response wrappers when compression is
+// enabled, so a compressed body would reach the client with the prefix still on
+// every name. The request offers the full set Claude Code sends and sets the
+// header itself, which stops the Go transport from decompressing
+// transparently: a compressed response stays visible here.
 func TestResponsesStayIdentityEncoded(t *testing.T) {
 	t.Run("streamed", func(t *testing.T) {
 		created := testHarness.createKey(t, "encoding-stream")
@@ -41,8 +42,9 @@ func TestResponsesStayIdentityEncoded(t *testing.T) {
 	})
 }
 
-// gzipAcceptingRequest sends one /v1/messages request advertising gzip and
-// returns the response's Content-Encoding with its raw, undecoded body.
+// gzipAcceptingRequest sends one /v1/messages request advertising every
+// encoding Claude Code accepts and returns the response's Content-Encoding with
+// its raw, undecoded body.
 func gzipAcceptingRequest(t *testing.T, key string, payload string) (string, []byte) {
 	t.Helper()
 	request, err := http.NewRequestWithContext(
@@ -56,7 +58,7 @@ func gzipAcceptingRequest(t *testing.T, key string, payload string) (string, []b
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+key)
-	request.Header.Set("Accept-Encoding", "gzip")
+	request.Header.Set("Accept-Encoding", "gzip, deflate, br, zstd")
 
 	response, err := testHarness.client.Do(request)
 	if err != nil {
