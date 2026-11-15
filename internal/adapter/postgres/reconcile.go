@@ -96,13 +96,14 @@ WHERE r.operation = 'generation'
 	return s.reconcileRows(ctx, query, now, delay, "reconcile observed accounting")
 }
 
-// reconcileRefused settles at zero cost the settled generations the embedded SDK
-// refused itself: an unroutable request, an unknown route, a credential cooldown or
-// no usable credential. No provider was called, and an upstream error always leaves a
-// failed usage record, so a refusal without any attempt spent nothing. Other server
-// errors are left to reconcileUnknownCompleted, because a real attempt can end in one
-// without a record. It must run before reconcileUnknownCompleted, which would otherwise
-// mark these rows unknown and block token and cost budgets for nothing. A usage record
+// reconcileRefused settles at zero cost the settled generations with no recorded
+// attempt that the embedded SDK refused itself, before calling any provider (the
+// statuses in the query). The SDK publishes a failed usage record for every upstream
+// error (reporter.TrackFailure in its executors), so a refusal without any recorded
+// attempt spent nothing — re-check this at each SDK upgrade. Other server errors are
+// left to reconcileUnknownCompleted, because a real attempt can end in one without a
+// record. It must run before reconcileUnknownCompleted, which would otherwise mark
+// these rows unknown and block token and cost budgets for nothing. A usage record
 // arriving late still moves the row to observed.
 func (s *Store) reconcileRefused(ctx context.Context, now time.Time, delay time.Duration) (int64, error) {
 	const query = `

@@ -132,16 +132,18 @@ func TestReconcileGatewayRefusalBudget(t *testing.T) {
 			awaitUsageAttempts(t, created.Key.ProjectID, 1)
 		})
 	}
-	t.Run("attempt without usage stays unknown and blocks", func(t *testing.T) {
-		created := testHarness.createKey(t, "budget-lost-usage")
-		testHarness.insertPendingCompletion(t, created, http.StatusOK)
-		testHarness.setBudget(t, created, governance.DimensionCost, 100, governance.ActionBlock)
-		reconcileSettled(t)
-		status, _ := authenticatedGeneration(t, created.Plaintext, "test-model")
-		if status != http.StatusPaymentRequired {
-			t.Fatalf("lost usage status = %d, want 402", status)
-		}
-	})
+	for _, unknown := range []int{http.StatusOK, http.StatusInternalServerError} {
+		t.Run(fmt.Sprintf("%d without attempt stays unknown and blocks", unknown), func(t *testing.T) {
+			created := testHarness.createKey(t, fmt.Sprintf("budget-lost-usage-%d", unknown))
+			testHarness.insertPendingCompletion(t, created, unknown)
+			testHarness.setBudget(t, created, governance.DimensionCost, 100, governance.ActionBlock)
+			reconcileSettled(t)
+			status, _ := authenticatedGeneration(t, created.Plaintext, "test-model")
+			if status != http.StatusPaymentRequired {
+				t.Fatalf("lost usage status = %d, want 402", status)
+			}
+		})
+	}
 }
 
 // reconcileSettled runs one reconciliation pass whose settlement delay covers the seeded
