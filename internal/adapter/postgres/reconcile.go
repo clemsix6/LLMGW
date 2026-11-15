@@ -44,6 +44,10 @@ func (s *Store) ReconcileAccounting(
 	if err != nil {
 		return governance.ReconcileResult{}, err
 	}
+	zero, err := s.reconcileRefused(ctx, now, settlementDelay)
+	if err != nil {
+		return governance.ReconcileResult{}, err
+	}
 	unknownCompleted, err := s.reconcileUnknownCompleted(ctx, now, settlementDelay)
 	if err != nil {
 		return governance.ReconcileResult{}, err
@@ -55,6 +59,7 @@ func (s *Store) ReconcileAccounting(
 	return governance.ReconcileResult{
 		Observed: observed + stale.Observed,
 		Unknown:  unknownCompleted + stale.Unknown,
+		Zero:     zero,
 	}, nil
 }
 
@@ -89,6 +94,27 @@ WHERE r.operation = 'generation'
   AND r.completed_at < $1::timestamptz - make_interval(secs => $2::double precision)
   AND EXISTS (SELECT 1 FROM usage_attempt a WHERE a.request_id = r.id)`
 	return s.reconcileRows(ctx, query, now, delay, "reconcile observed accounting")
+}
+
+// reconcileRefused settles at zero cost the settled generations the embedded SDK
+// refused itself: an unroutable request, an unknown route, a credential cooldown or
+// no usable credential. No provider was called, and an upstream error always leaves a
+// failed usage record, so a refusal without any attempt spent nothing. Other server
+// errors are left to reconcileUnknownCompleted, because a real attempt can end in one
+// without a record. It must run before reconcileUnknownCompleted, which would otherwise
+// mark these rows unknown and block token and cost budgets for nothing. A usage record
+// arriving late still moves the row to observed.
+func (s *Store) reconcileRefused(ctx context.Context, now time.Time, delay time.Duration) (int64, error) {
+	const query = `
+UPDATE request_event r
+SET accounting_state = 'resolved_zero', accounting_resolved_at = $1
+WHERE r.operation = 'generation'
+  AND r.state = 'completed'
+  AND r.accounting_state = 'pending'
+  AND r.downstream_status IN (400, 404, 429, 503)
+  AND r.completed_at < $1::timestamptz - make_interval(secs => $2::double precision)
+  AND NOT EXISTS (SELECT 1 FROM usage_attempt a WHERE a.request_id = r.id)`
+	return s.reconcileRows(ctx, query, now, delay, "reconcile refused accounting")
 }
 
 // reconcileUnknownCompleted marks settled completed requests without usage as unknown.
