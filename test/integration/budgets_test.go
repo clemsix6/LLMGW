@@ -109,6 +109,77 @@ func TestAccountingUnknownBlocksTokenCostButNotCalls(t *testing.T) {
 	}
 }
 
+// TestReconcileGatewayRefusalBudget proves a refusal without any attempt costs nothing,
+// while a completed generation whose attempt lost its usage still blocks.
+func TestReconcileGatewayRefusalBudget(t *testing.T) {
+	refusals := []int{
+		http.StatusBadRequest,
+		http.StatusNotFound,
+		http.StatusTooManyRequests,
+		http.StatusServiceUnavailable,
+	}
+	for _, refusal := range refusals {
+		t.Run(fmt.Sprintf("refusal %d without attempt does not block", refusal), func(t *testing.T) {
+			created := testHarness.createKey(t, fmt.Sprintf("budget-refusal-%d", refusal))
+			testHarness.insertPendingCompletion(t, created, refusal)
+			testHarness.setBudget(t, created, governance.DimensionCost, 100, governance.ActionBlock)
+			reconcileSettled(t)
+			testHarness.Upstream.Enqueue(jsonUsageResponse(2, 1))
+			status, _ := authenticatedGeneration(t, created.Plaintext, "test-model")
+			if status != http.StatusOK {
+				t.Fatalf("refusal status = %d, want 200", status)
+			}
+			awaitUsageAttempts(t, created.Key.ProjectID, 1)
+		})
+	}
+	for _, unknown := range []int{http.StatusOK, http.StatusInternalServerError} {
+		t.Run(fmt.Sprintf("%d without attempt stays unknown and blocks", unknown), func(t *testing.T) {
+			created := testHarness.createKey(t, fmt.Sprintf("budget-lost-usage-%d", unknown))
+			testHarness.insertPendingCompletion(t, created, unknown)
+			testHarness.setBudget(t, created, governance.DimensionCost, 100, governance.ActionBlock)
+			reconcileSettled(t)
+			status, _ := authenticatedGeneration(t, created.Plaintext, "test-model")
+			if status != http.StatusPaymentRequired {
+				t.Fatalf("lost usage status = %d, want 402", status)
+			}
+		})
+	}
+}
+
+// reconcileSettled runs one reconciliation pass whose settlement delay covers the seeded
+// completions but not the requests other tests just made.
+func reconcileSettled(t *testing.T) {
+	t.Helper()
+	_, err := testHarness.Store.ReconcileAccounting(
+		context.Background(), time.Now().UTC(), 5*time.Minute, 24*time.Hour,
+	)
+	if err != nil {
+		t.Fatal("reconcile integration accounting failed")
+	}
+}
+
+// insertPendingCompletion seeds one settled completed generation with pending accounting and no attempt.
+func (h *Harness) insertPendingCompletion(t *testing.T, created governance.CreatedKey, status int) {
+	t.Helper()
+	const query = `
+INSERT INTO request_event (
+    id, project_id, client_key_id, operation, requested_at, completed_at,
+    method, path, state, accounting_state, downstream_status
+) VALUES (
+    gen_random_uuid(), $1, $2, 'generation', now() - interval '10 minutes', now() - interval '10 minutes',
+    'POST', '/v1/chat/completions', 'completed', 'pending', $3
+)`
+	if _, err := h.db.Exec(
+		context.Background(),
+		query,
+		created.Key.ProjectID,
+		created.Key.ID,
+		status,
+	); err != nil {
+		t.Fatal("insert pending integration completion failed")
+	}
+}
+
 // TestWarnBudgetNeverChangesSDKResponse catches warn-as-block mutations.
 func TestWarnBudgetNeverChangesSDKResponse(t *testing.T) {
 	created := testHarness.createKey(t, "budget-warn")

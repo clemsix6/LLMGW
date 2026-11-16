@@ -125,7 +125,7 @@ func reconcile(
 		return
 	}
 	tracker.ObserveDatabase(true)
-	log.Printf("governance reconciliation: observed=%d unknown=%d", result.Observed, result.Unknown)
+	log.Printf("governance reconciliation: observed=%d unknown=%d zero=%d", result.Observed, result.Unknown, result.Zero)
 }
 
 // pruneCompleted performs one completed request retention sweep and logs its aggregate outcome.

@@ -109,4 +109,5 @@ type UsageAttempt struct {
 type ReconcileResult struct {
 	Observed int64 // Observed is the number of requests resolved with usage.
 	Unknown  int64 // Unknown is the number of requests left without known usage.
+	Zero     int64 // Zero is the number of gateway refusals settled at zero cost.
 }
